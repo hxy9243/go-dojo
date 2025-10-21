@@ -6,7 +6,7 @@ import (
 	"os"
 	"strconv"
 
-	"github.com/hxy9243/learn-go-by-examples/rate-limiter/ratelimit"
+	"github.com/hxy9243/go-dojo/rate-limiter/ratelimit"
 )
 
 type ServerConfig struct {
