@@ -225,6 +225,16 @@ func (agg *Aggregator) flushAll() error {
 	return fmt.Errorf("Error flushing to DB, encountered errors: %s", strings.Join(errs, "; "))
 }
 
+/*
+Aggregator runloop is the main entry for the aggregator. It handles:
+- Checks after start or recovery
+- Main runloop and aggregation, it performs:
+  - Reads from Kafaka stream
+  - Aggregate based on message key value
+  - Flushes to database periodically
+
+- Handles rebalance when partitions leave consumer worker
+*/
 func (agg *Aggregator) run() error {
 	log.Printf("Starting aggregate worker runloop...")
 
@@ -249,10 +259,12 @@ func (agg *Aggregator) run() error {
 
 			switch e := evt.(type) {
 			case *kafka.Message:
+				// handles regular message
 				if err := agg.processMessage(e); err != nil {
 					log.Printf("Error processing message: %s", err)
 				}
 			case *kafka.RevokedPartitions:
+				// handles partition rebalance
 				log.Printf("Repartitioning, flushing leaving partitions...")
 
 				for _, partition := range e.Partitions {
@@ -279,15 +291,6 @@ func (agg *Aggregator) run() error {
 
 func (agg *Aggregator) Run() error {
 	log.Printf("Starting aggregator...")
-
-	/* TODO:
-	- Startup sequence checks the partition offset from persistent datastore, and discards msg before offset
-
-	- Run sequence performs the following:
-	  - keep reading from kafka
-	  - aggregates to different keys
-	  - flushes to persistent store once a threshold is reached (key number / timeout)
-	*/
 
 	return agg.run()
 }
