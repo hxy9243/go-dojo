@@ -2,11 +2,12 @@ package aggregate
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"log"
 	"os"
 	"os/signal"
-	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -212,17 +213,30 @@ func (agg *Aggregator) processMessage(msg *kafka.Message) error {
 }
 
 func (agg *Aggregator) flushAll() error {
-	errs := []string{}
+	errChan := make(chan error, len(agg.partitions))
+	wg := &sync.WaitGroup{}
 
 	for _, partition := range agg.partitions {
-		if err := partition.Flush(agg.dbsession, agg.consumer); err != nil {
-			errs = append(errs, err.Error())
-		}
+		wg.Go(func() {
+			if err := partition.Flush(agg.dbsession, agg.consumer); err != nil {
+				errChan <- err
+			}
+		})
 	}
-	if len(errs) == 0 {
-		return nil
+
+	go func() {
+		wg.Wait()
+		close(errChan)
+	}()
+
+	var errs error
+	for err := range errChan {
+		errs = errors.Join(errs, err)
 	}
-	return fmt.Errorf("Error flushing to DB, encountered errors: %s", strings.Join(errs, "; "))
+	if errs != nil {
+		return fmt.Errorf("Error flushing all records, encountered errors: %s", errs)
+	}
+	return nil
 }
 
 /*
