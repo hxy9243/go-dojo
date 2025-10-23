@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
+
+	"github.com/hxy9243/go-dojo/counter/config"
 )
 
 type Event struct {
@@ -18,8 +20,8 @@ type Event struct {
 }
 
 type WriteAPIWorkerConfig struct {
-	KafkaAddr string
-	Topic     string
+	KafkaAddr  string
+	KafkaTopic string
 }
 
 // WRite API worker receives event and
@@ -28,22 +30,28 @@ type WriteAPIWorker struct {
 	producer *kafka.Producer
 }
 
-func NewWriteAPIWorker(config WriteAPIWorkerConfig) (*WriteAPIWorker, error) {
+func NewWriteAPIWorker(config config.Config) (*WriteAPIWorker, error) {
 	// create producer for sending kafka requests
 	producer, err := kafka.NewProducer(&kafka.ConfigMap{"bootstrap.servers": config.KafkaAddr})
 	if err != nil {
 		return nil, err
 	}
+	log.Printf("Connected to Kafka at %s, writing to topic %s", config.KafkaAddr, config.KafkaTopic)
 
 	// create mux for handling HTTP req
 	mux := http.NewServeMux()
 	mux.HandleFunc("/event", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			json.NewEncoder(w).Encode(map[string]any{"code": http.StatusMethodNotAllowed, "detail": "Method not allowed"})
+			return
+		}
+
 		var event Event
 		defer r.Body.Close()
 
 		if err := json.NewDecoder(r.Body).Decode(&event); err != nil {
 			w.WriteHeader(http.StatusBadRequest)
-
 			json.NewEncoder(w).Encode(map[string]any{"code": http.StatusBadRequest, "detail": "Error parsing input request"})
 			return
 		}
@@ -54,7 +62,7 @@ func NewWriteAPIWorker(config WriteAPIWorkerConfig) (*WriteAPIWorker, error) {
 		// send a write event to kafka
 		producer.Produce(&kafka.Message{
 			TopicPartition: kafka.TopicPartition{
-				Topic:     &config.Topic,
+				Topic:     &config.KafkaTopic,
 				Partition: kafka.PartitionAny,
 			},
 			Key:   []byte(event.EventKey),
@@ -62,6 +70,7 @@ func NewWriteAPIWorker(config WriteAPIWorkerConfig) (*WriteAPIWorker, error) {
 		}, nil)
 
 		w.WriteHeader(http.StatusAccepted)
+		log.Printf("POST handled event request for %s: %d", event.EventKey, event.EventValue)
 	})
 
 	return &WriteAPIWorker{
@@ -71,7 +80,7 @@ func NewWriteAPIWorker(config WriteAPIWorkerConfig) (*WriteAPIWorker, error) {
 }
 
 func (w *WriteAPIWorker) Serve(addr string) error {
-	log.Printf("Starting write API workers...")
+	log.Printf("Starting write API workers, listening to HTTP requests on %s...", addr)
 
 	return http.ListenAndServe(addr, w.mux)
 }

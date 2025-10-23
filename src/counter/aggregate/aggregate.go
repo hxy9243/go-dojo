@@ -13,6 +13,8 @@ import (
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/gocql/gocql"
+
+	"github.com/hxy9243/go-dojo/counter/config"
 )
 
 const (
@@ -21,22 +23,13 @@ const (
 	CounterTable = "counters"
 )
 
-type AggregatorConfig struct {
-	KafkaAddr string
-	Topic     string
-	GroupId   string
-
-	CassandraAddr     []string
-	CassandraKeyspace string
-}
-
 type PartitionState struct {
 	PartitionID int32
 	Offset      int64
 	Counters    map[string]int64
 }
 
-func (ps *PartitionState) Flush(session *gocql.Session, consumer *kafka.Consumer) error {
+func (ps *PartitionState) Flush(topic string, session *gocql.Session, consumer *kafka.Consumer) error {
 	if len(ps.Counters) == 0 {
 		return nil
 	}
@@ -44,24 +37,29 @@ func (ps *PartitionState) Flush(session *gocql.Session, consumer *kafka.Consumer
 	// flushes to DB
 	batch := session.NewBatch(gocql.UnloggedBatch)
 	for key, delta := range ps.Counters {
-		batch.Query(`UPDATE counters SET total = total + ? WHERE key = ?`, delta, key)
+		batch.Query(`UPDATE counters SET counter = counter + ? WHERE key = ?`, delta, key)
 	}
-	batch.Query(`UPDATE partitions SET offset = ? WHERE partition_id = ?`,
-		ps.Offset, ps.PartitionID)
-
 	err := session.ExecuteBatch(batch)
 	if err != nil {
-		return fmt.Errorf("Error flushing to DB: %s", err)
+		return fmt.Errorf("error flushing to DB: %w", err)
 	}
+	if err := session.Query(`UPDATE partitions SET offset = ? WHERE partition = ?`,
+		ps.Offset, ps.PartitionID).Exec(); err != nil {
+		return fmt.Errorf("error flushing to DB: %w", err)
+	}
+
 	ps.Counters = make(map[string]int64)
 
 	// commit to kafka
 	if _, err := consumer.CommitOffsets([]kafka.TopicPartition{
-		{Partition: ps.PartitionID, Offset: kafka.Offset(ps.Offset)},
+		{
+			Topic:     &topic,
+			Partition: ps.PartitionID,
+			Offset:    kafka.Offset(ps.Offset),
+		},
 	}); err != nil {
-		return fmt.Errorf("Error commiting to Kafka: %s", err)
+		return fmt.Errorf("error committing to Kafka: %w", err)
 	}
-
 	return nil
 }
 
@@ -87,30 +85,32 @@ key string primary key
 count Counter
 */
 type Aggregator struct {
-	config AggregatorConfig
+	config config.Config
 
 	consumer  *kafka.Consumer
 	dbsession *gocql.Session
 
-	partitions map[int32]PartitionState
+	partitions map[int32]*PartitionState
 }
 
-func newAggregator(config AggregatorConfig) (*Aggregator, error) {
+func newAggregator(config config.Config) (*Aggregator, error) {
 	// create kafka connection
 	consumer, err := kafka.NewConsumer(&kafka.ConfigMap{
 		"bootstrap.servers":               config.KafkaAddr,
-		"group.id":                        config.GroupId,
+		"group.id":                        config.KafkaGroupID,
 		"go.application.rebalance.enable": true,
-		"auto.offset.reset":               "manual",
-		// "max.poll.interval.ms": 1000,
-		// "session.timeout.ms":   500,
+		"enable.auto.commit":              false,
+		"auto.offset.reset":               "earliest",
+		// "max.poll.interval.ms":            500,
+		// "session.timeout.ms":              20,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("Error creating kafka consumer: %s", err)
+		return nil, fmt.Errorf("error creating kafka consumer: %w", err)
 	}
-	if err := consumer.SubscribeTopics([]string{}, nil); err != nil {
-		return nil, fmt.Errorf("Error subscribing kafka topic: %s", err)
+	if err := consumer.SubscribeTopics([]string{config.KafkaTopic}, nil); err != nil {
+		return nil, fmt.Errorf("error subscribing kafka topic: %w", err)
 	}
+	log.Printf("Connected to Kafka at %s, subscribed to topic %s, group %s", config.KafkaAddr, config.KafkaTopic, config.KafkaGroupID)
 
 	// create cassandra connection
 	cluster := gocql.NewCluster(config.CassandraAddr...)
@@ -118,8 +118,9 @@ func newAggregator(config AggregatorConfig) (*Aggregator, error) {
 	cluster.Consistency = gocql.Quorum
 	dbsession, err := cluster.CreateSession()
 	if err != nil {
-		return nil, fmt.Errorf("Error connecting to cassandra: %s", err)
+		return nil, fmt.Errorf("error connecting to cassandra: %w", err)
 	}
+	log.Printf("Connected to cassandra %s at keyspace %s", config.CassandraAddr, config.CassandraKeyspace)
 
 	return &Aggregator{
 		config: config,
@@ -127,12 +128,12 @@ func newAggregator(config AggregatorConfig) (*Aggregator, error) {
 		consumer:  consumer,
 		dbsession: dbsession,
 
-		partitions: make(map[int32]PartitionState),
+		partitions: make(map[int32]*PartitionState),
 	}, nil
 }
 
 // NewAggregator creates an aggregator with backoff
-func NewAggregator(config AggregatorConfig) (*Aggregator, error) {
+func NewAggregator(config config.Config) (*Aggregator, error) {
 	const Retries = 5
 
 	for range Retries {
@@ -147,10 +148,10 @@ func NewAggregator(config AggregatorConfig) (*Aggregator, error) {
 		return agg, nil
 	}
 
-	return nil, fmt.Errorf("Error initializing aggregator after %d tries", Retries)
+	return nil, fmt.Errorf("error initializing aggregator after %d tries", Retries)
 }
 
-func (agg *Aggregator) lookupPartition(partition int32) (PartitionState, error) {
+func (agg *Aggregator) lookupPartition(partition int32) (*PartitionState, error) {
 	po, ok := agg.partitions[partition]
 	if ok {
 		return po, nil
@@ -160,28 +161,31 @@ func (agg *Aggregator) lookupPartition(partition int32) (PartitionState, error) 
 		offset int64
 	)
 	err := agg.dbsession.Query(
-		`SELECT offset FROM `+PartitionTable+` WHERE KEY = ? LIMIT 1`,
-		partition,
+		`SELECT offset FROM `+PartitionTable+` WHERE partition = ?`, partition,
 	).Scan(&offset)
 
 	if err != nil {
 		if err == gocql.ErrNotFound {
-			// use invalid partition to indicate not found
-			return PartitionState{PartitionID: partition, Offset: 0, Counters: make(map[string]int64)}, nil
+			po = &PartitionState{PartitionID: partition, Offset: 0, Counters: make(map[string]int64)}
+		} else {
+			return nil, fmt.Errorf("error querying database: %w", err)
 		}
-		return PartitionState{}, fmt.Errorf("Error querying database: %s", err)
-	}
-
-	po = PartitionState{
-		PartitionID: partition,
-		Offset:      offset,
-		Counters:    make(map[string]int64),
+	} else {
+		po = &PartitionState{
+			PartitionID: partition,
+			Offset:      offset,
+			Counters:    make(map[string]int64),
+		}
 	}
 	agg.partitions[partition] = po
 	return po, nil
 }
 
 func (agg *Aggregator) processMessage(msg *kafka.Message) error {
+	if len(msg.Value) != 4 {
+		return fmt.Errorf("error invalid counter message: %s", string(msg.Value))
+	}
+
 	var (
 		key string = string(msg.Key)
 		val uint32 = binary.BigEndian.Uint32(msg.Value)
@@ -195,7 +199,7 @@ func (agg *Aggregator) processMessage(msg *kafka.Message) error {
 	// check for partition offset, skip if offset
 	partitionCount, err := agg.lookupPartition(partition)
 	if err != nil {
-		return err
+		return fmt.Errorf("error looking up partition: %w", err)
 	}
 	if offset <= partitionCount.Offset {
 		return nil
@@ -205,10 +209,13 @@ func (agg *Aggregator) processMessage(msg *kafka.Message) error {
 
 	existVal, ok := partitionCount.Counters[key]
 	if !ok {
-		partitionCount.Counters[key] = 0
+		partitionCount.Counters[key] = int64(val)
 	} else {
 		partitionCount.Counters[key] = existVal + int64(val)
 	}
+
+	log.Printf("Counter %s at %d", key, partitionCount.Counters[key])
+
 	return nil
 }
 
@@ -218,7 +225,7 @@ func (agg *Aggregator) flushAll() error {
 
 	for _, partition := range agg.partitions {
 		wg.Go(func() {
-			if err := partition.Flush(agg.dbsession, agg.consumer); err != nil {
+			if err := partition.Flush(agg.config.KafkaTopic, agg.dbsession, agg.consumer); err != nil {
 				errChan <- err
 			}
 		})
@@ -234,7 +241,7 @@ func (agg *Aggregator) flushAll() error {
 		errs = errors.Join(errs, err)
 	}
 	if errs != nil {
-		return fmt.Errorf("Error flushing all records, encountered errors: %s", errs)
+		return fmt.Errorf("error flushing all records, encountered errors: %w", errs)
 	}
 	return nil
 }
@@ -256,6 +263,9 @@ func (agg *Aggregator) run() error {
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
 	run := true
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+
 	for run {
 		select {
 		case <-sigChan:
@@ -265,8 +275,13 @@ func (agg *Aggregator) run() error {
 			if err := agg.flushAll(); err != nil {
 				log.Printf("Error flushing aggregate")
 			}
+
+		case <-ticker.C:
+			if err := agg.flushAll(); err != nil {
+				log.Printf("Error flushing aggregate: %s", err)
+			}
 		default:
-			evt := agg.consumer.Poll(1000)
+			evt := agg.consumer.Poll(100)
 			if evt == nil {
 				continue
 			}
@@ -288,7 +303,7 @@ func (agg *Aggregator) run() error {
 					}
 					log.Printf("Repartitioning ID %d", partitionCounter.PartitionID)
 
-					if err := partitionCounter.Flush(agg.dbsession, agg.consumer); err != nil {
+					if err := partitionCounter.Flush(agg.config.KafkaTopic, agg.dbsession, agg.consumer); err != nil {
 						log.Printf("Error flushing partition %d during rebalance: %s", partitionCounter.PartitionID, err)
 					}
 				}
@@ -296,6 +311,12 @@ func (agg *Aggregator) run() error {
 				for _, partition := range e.Partitions {
 					delete(agg.partitions, partition.Partition)
 				}
+			case kafka.Error:
+				log.Printf("Error encountered when reading from Kafka: %s", e)
+				return fmt.Errorf("error reading from Kafka: %w", e)
+
+			default:
+				log.Printf("Unknown event: %s, %T", e, e)
 			}
 		}
 	}
