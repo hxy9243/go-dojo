@@ -15,10 +15,10 @@ import (
 var rootCmd = &cobra.Command{
 	Use:   "counter",
 	Short: "A Kafka-based counter application",
-	Long:  `A Kafka-based counter application that can run as either a producer or a consumer.`,
+	Long:  `A Kafka-based counter application that can runs different stages of counter worker.`,
 }
 
-var producerCmd = &cobra.Command{
+var writeAPICmd = &cobra.Command{
 	Use:   "write-api",
 	Short: "Run the Kafka producer",
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -26,29 +26,25 @@ var producerCmd = &cobra.Command{
 	},
 }
 
-var consumerCmd = &cobra.Command{
+var aggregatorCmd = &cobra.Command{
 	Use:   "consumer",
 	Short: "Run the Kafka consumer and aggregator",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return runConsumer()
+		return runAggregator()
+	},
+}
+var readAPICmd = &cobra.Command{
+	Use:   "read-api",
+	Short: "Run the read API worker",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runReadAPIWorker()
 	},
 }
 
 func init() {
-	rootCmd.AddCommand(producerCmd)
-	rootCmd.AddCommand(consumerCmd)
-}
-
-func runConsumer() error {
-	config, err := config.LoadDefaultConfig()
-	if err != nil {
-		return fmt.Errorf("error loading configuration: %w", err)
-	}
-	agg, err := aggregate.NewAggregator(config)
-	if err != nil {
-		return fmt.Errorf("error creating aggregator: %w", err)
-	}
-	return agg.Run()
+	rootCmd.AddCommand(writeAPICmd)
+	rootCmd.AddCommand(aggregatorCmd)
+	rootCmd.AddCommand(readAPICmd)
 }
 
 func runWriteAPIWorker() error {
@@ -62,6 +58,31 @@ func runWriteAPIWorker() error {
 	}
 
 	return writeAPIWorker.Serve(":8080")
+}
+
+func runAggregator() error {
+	config, err := config.LoadDefaultConfig()
+	if err != nil {
+		return fmt.Errorf("error loading configuration: %w", err)
+	}
+	agg, err := aggregate.NewAggregator(config)
+	if err != nil {
+		return fmt.Errorf("error creating aggregator: %w", err)
+	}
+	return agg.Run()
+}
+
+func runReadAPIWorker() error {
+	config, err := config.LoadDefaultConfig()
+	if err != nil {
+		return fmt.Errorf("error loading configuration: %w", err)
+	}
+	readAPIWorker, err := api.NewReadAPIWorker(config)
+	if err != nil {
+		return fmt.Errorf("error launching read API worker: %w", err)
+	}
+
+	return readAPIWorker.Serve(":8081")
 }
 
 func main() {
