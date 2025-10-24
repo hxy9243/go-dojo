@@ -57,7 +57,7 @@ func getEnvAsInt(name string, fallback int) int {
 }
 
 func main() {
-	redisMasterName := getEnv("REDIS_MASTER_NAME", "localhost:6379")
+	redisMasterName := getEnv("REDIS_MASTER_NAME", "mymaster")
 	redisSentinelAddr := getEnv("REDIS_SENTINEL_ADDR", "localhost:26379")
 	redisPassword := getEnv("REDIS_PASSWORD", "")
 	rateLimit := getEnvAsInt("RATE_LIMIT", 100)

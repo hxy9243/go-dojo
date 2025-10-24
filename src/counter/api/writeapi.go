@@ -12,11 +12,11 @@ import (
 	"github.com/hxy9243/go-dojo/counter/config"
 )
 
-type Event struct {
-	Id         string    // universal ID for the event
-	Timestamp  time.Time // timestamp
-	EventKey   string    // event key for counter aggregation
-	EventValue uint32
+type EventRequest struct {
+	Id         string    `json:"id"`        // universal ID for the event
+	Timestamp  time.Time `json:"timestamp"` // timestamp
+	EventKey   string    `json:"eventkey"`  // event key for counter aggregation
+	EventValue uint32    `json:"eventvalue"`
 }
 
 type WriteAPIWorkerConfig struct {
@@ -47,7 +47,7 @@ func NewWriteAPIWorker(config config.Config) (*WriteAPIWorker, error) {
 			return
 		}
 
-		var event Event
+		var event EventRequest
 		defer r.Body.Close()
 
 		if err := json.NewDecoder(r.Body).Decode(&event); err != nil {
