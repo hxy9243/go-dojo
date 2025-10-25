@@ -107,8 +107,9 @@ func (worker *ReadAPIWorker) Serve(addr string) error {
 }
 
 func (worker *ReadAPIWorker) Close() error {
+	worker.dbsession.Close()
 
-	return nil
+	return worker.redisClient.Close()
 }
 
 func (worker *ReadAPIWorker) initHandlers() {
@@ -174,7 +175,7 @@ func (worker *ReadAPIWorker) readKey(ctx context.Context, key string) (int64, er
 				set, err := worker.redisClient.SetNX(
 					ctx,
 					key+".counter-lock",
-					true,
+					worker.ID,
 					time.Duration(worker.config.RedisCacheTTLms)*time.Millisecond,
 				).Result()
 				if err != nil {

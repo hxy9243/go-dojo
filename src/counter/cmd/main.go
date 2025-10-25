@@ -69,6 +69,12 @@ func runWriteAPIWorker() error {
 		return fmt.Errorf("error launching write API worker: %w", err)
 	}
 
+	defer func() {
+		if err := writeAPIWorker.Close(); err != nil {
+			log.Printf("Error closing write API worker: %s", err)
+		}
+	}()
+
 	listenAddr := fmt.Sprintf("%s:%d", writeAPIHost, writeAPIPort)
 	return writeAPIWorker.Serve(listenAddr)
 }
@@ -82,6 +88,11 @@ func runAggregator() error {
 	if err != nil {
 		return fmt.Errorf("error creating aggregator: %w", err)
 	}
+	defer func() {
+		if err := agg.Close(); err != nil {
+			log.Printf("Error closing aggregator worker: %s", err)
+		}
+	}()
 	return agg.Run()
 }
 
@@ -94,6 +105,12 @@ func runReadAPIWorker() error {
 	if err != nil {
 		return fmt.Errorf("error launching read API worker: %w", err)
 	}
+
+	defer func() {
+		if err := readAPIWorker.Close(); err != nil {
+			log.Printf("Error closing read API worker: %s", err)
+		}
+	}()
 	listenAddr := fmt.Sprintf("%s:%d", readAPIHost, readAPIPort)
 	return readAPIWorker.Serve(listenAddr)
 }

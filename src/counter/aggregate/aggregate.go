@@ -205,7 +205,7 @@ func (agg *Aggregator) processMessage(msg *kafka.Message) error {
 		return nil
 	}
 
-	partitionCount.Offset = offset
+	partitionCount.Offset = offset + 1
 
 	existVal, ok := partitionCount.Counters[key]
 	if !ok {
@@ -331,5 +331,7 @@ func (agg *Aggregator) Run() error {
 }
 
 func (agg *Aggregator) Close() error {
+	agg.dbsession.Close()
+
 	return agg.consumer.Close()
 }

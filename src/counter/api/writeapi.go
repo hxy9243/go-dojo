@@ -60,14 +60,19 @@ func NewWriteAPIWorker(config config.Config) (*WriteAPIWorker, error) {
 		binary.BigEndian.PutUint32(valueBytes, uint32(event.EventValue))
 
 		// send a write event to kafka
-		producer.Produce(&kafka.Message{
+		if err := producer.Produce(&kafka.Message{
 			TopicPartition: kafka.TopicPartition{
 				Topic:     &config.KafkaTopic,
 				Partition: kafka.PartitionAny,
 			},
 			Key:   []byte(event.EventKey),
 			Value: valueBytes,
-		}, nil)
+		}, nil); err != nil {
+			log.Printf("Error writing to kafka for %s: %d", event.EventKey, event.EventValue)
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(map[string]any{"code": http.StatusInternalServerError, "detail": "Error writing to Kafka"})
+			return
+		}
 
 		w.WriteHeader(http.StatusAccepted)
 		log.Printf("POST handled event request for %s: %d", event.EventKey, event.EventValue)
@@ -83,4 +88,10 @@ func (w *WriteAPIWorker) Serve(addr string) error {
 	log.Printf("Starting write API workers, listening to HTTP requests on %s...", addr)
 
 	return http.ListenAndServe(addr, w.mux)
+}
+
+func (w *WriteAPIWorker) Close() error {
+	w.producer.Close()
+
+	return nil
 }
