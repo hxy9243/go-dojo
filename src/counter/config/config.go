@@ -14,9 +14,12 @@ type Config struct {
 	CassandraAddr     []string `mapstructure:"CASSANDRA_ADDR"`
 	CassandraKeyspace string   `mapstructure:"CASSANDRA_KEYSPACE"`
 
-	RedisMasterName string   `mapstructure:"REDIS_MASTER_NAME"`
-	RedisAddr       []string `mapstructure:"REDIS_ADDR"`
-	RedisPassword   string   `mapstructure:"REDIS_PASSWORD"`
+	RedisServiceType string   `mapstructure:"REDIS_SERVICE_TYPE"`
+	RedisMasterName  string   `mapstructure:"REDIS_MASTER_NAME"`
+	RedisAddr        []string `mapstructure:"REDIS_ADDR"`
+	RedisPassword    string   `mapstructure:"REDIS_PASSWORD"`
+
+	RedisCacheTTLms int64 `mapstructure:"REDIS_CACHE_TTL_MS"`
 }
 
 func LoadDefaultConfig() (Config, error) {
@@ -30,9 +33,12 @@ func LoadDefaultConfig() (Config, error) {
 	viper.SetDefault("CASSANDRA_ADDR", "localhost:9042")
 	viper.SetDefault("CASSANDRA_KEYSPACE", "counter")
 
+	viper.SetDefault("REDIS_SERVICE_TYPE", "sentinel")
 	viper.SetDefault("REDIS_MASTER_NAME", "mymaster")
 	viper.SetDefault("REDIS_ADDR", "localhost:6379")
 	viper.SetDefault("REDIS_PASSWORD", "")
+
+	viper.SetDefault("REDIS_CACHE_TTL_MS", 500)
 
 	var config Config
 	// Need to manually handle comma-separated string

@@ -12,6 +12,13 @@ import (
 	"github.com/hxy9243/go-dojo/counter/config"
 )
 
+var (
+	writeAPIHost string
+	writeAPIPort int
+	readAPIHost  string
+	readAPIPort  int
+)
+
 var rootCmd = &cobra.Command{
 	Use:   "counter",
 	Short: "A Kafka-based counter application",
@@ -42,6 +49,11 @@ var readAPICmd = &cobra.Command{
 }
 
 func init() {
+	writeAPICmd.Flags().StringVarP(&writeAPIHost, "host", "l", "0.0.0.0", "Listen address for the write API")
+	writeAPICmd.Flags().IntVarP(&writeAPIPort, "port", "p", 8080, "Listen port for the write API")
+	readAPICmd.Flags().StringVarP(&readAPIHost, "host", "l", "0.0.0.0", "Listen address for the read API")
+	readAPICmd.Flags().IntVarP(&readAPIPort, "port", "p", 8081, "Listen port for the read API")
+
 	rootCmd.AddCommand(writeAPICmd)
 	rootCmd.AddCommand(aggregatorCmd)
 	rootCmd.AddCommand(readAPICmd)
@@ -57,7 +69,8 @@ func runWriteAPIWorker() error {
 		return fmt.Errorf("error launching write API worker: %w", err)
 	}
 
-	return writeAPIWorker.Serve(":8080")
+	listenAddr := fmt.Sprintf("%s:%d", writeAPIHost, writeAPIPort)
+	return writeAPIWorker.Serve(listenAddr)
 }
 
 func runAggregator() error {
@@ -81,8 +94,8 @@ func runReadAPIWorker() error {
 	if err != nil {
 		return fmt.Errorf("error launching read API worker: %w", err)
 	}
-
-	return readAPIWorker.Serve(":8081")
+	listenAddr := fmt.Sprintf("%s:%d", readAPIHost, readAPIPort)
+	return readAPIWorker.Serve(listenAddr)
 }
 
 func main() {
