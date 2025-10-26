@@ -1,0 +1,49 @@
+version: '3.8'
+
+services:
+  cassandra:
+    image: cassandra:4.0.19-jammy
+    container_name: cassandra
+    ports:
+      - "9042:9042"
+    environment:
+      - CASSANDRA_LISTEN_ADDRESS=0.0.0.0
+
+  kafka:
+    image: apache/kafka
+    container_name: kafka
+    ports:
+      - "9092:9092"
+
+  redis:
+    image: redis
+    container_name: my-redis
+    ports:
+      - "6379:6379"
+
+  read-api:
+    image: hxy9243/counter-worker
+    container_name: read-api
+    command: read-api
+    environment:
+      - REDIS_SERVICE_TYPE=standalone
+    depends_on:
+      - redis
+      - cassandra
+      - kafka
+
+  write-api:
+    image: hxy9243/counter-worker
+    container_name: write-api
+    command: write-api
+    depends_on:
+      - cassandra
+      - kafka
+
+  consumer:
+    image: hxy9243/counter-worker
+    container_name: consumer
+    command: consumer
+    depends_on:
+      - cassandra
+      - kafka
