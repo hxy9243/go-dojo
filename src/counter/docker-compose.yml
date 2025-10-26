@@ -1,17 +1,26 @@
-version: '3.8'
-
 services:
   cassandra:
     image: cassandra:4.0.19-jammy
     container_name: cassandra
     ports:
       - "9042:9042"
-    environment:
-      - CASSANDRA_LISTEN_ADDRESS=0.0.0.0
 
   kafka:
     image: apache/kafka
     container_name: kafka
+    environment:
+      - KAFKA_NODE_ID=1
+      - KAFKA_PROCESS_ROLES=broker,controller
+      - KAFKA_LISTENERS=PLAINTEXT://:9092,CONTROLLER://:9093
+      - KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://kafka:9092
+      - KAFKA_CONTROLLER_LISTENER_NAMES=CONTROLLER
+      - KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      - KAFKA_CONTROLLER_QUORUM_VOTERS=1@localhost:9093
+      - KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=1
+      - KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR=1
+      - KAFKA_TRANSACTION_STATE_LOG_MIN_ISR=1
+      - KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS=0
+      - KAFKA_NUM_PARTITIONS=3
     ports:
       - "9092:9092"
 
@@ -22,28 +31,44 @@ services:
       - "6379:6379"
 
   read-api:
-    image: hxy9243/counter-worker
+    image: hxy9243/counter-worker:0.0.3
     container_name: read-api
     command: read-api
+    restart: on-failure
+    ports:
+      - "0.0.0.0:8081:8081"
     environment:
       - REDIS_SERVICE_TYPE=standalone
+      - REDIS_ADDR=my-redis:6379
+      - KAFKA_ADDR=kafka:9092
+      - CASSANDRA_ADDR=cassandra:9042
     depends_on:
       - redis
       - cassandra
       - kafka
 
   write-api:
-    image: hxy9243/counter-worker
+    image: hxy9243/counter-worker:0.0.3
     container_name: write-api
     command: write-api
+    restart: on-failure
+    environment:
+      - KAFKA_ADDR=kafka:9092
+      - CASSANDRA_ADDR=cassandra:9042
+    ports:
+      - "0.0.0.0:8080:8080"
     depends_on:
       - cassandra
       - kafka
 
   consumer:
-    image: hxy9243/counter-worker
+    image: hxy9243/counter-worker:0.0.3
     container_name: consumer
     command: consumer
+    environment:
+      - KAFKA_ADDR=kafka:9092
+      - CASSANDRA_ADDR=cassandra:9042
+    restart: on-failure
     depends_on:
       - cassandra
       - kafka
