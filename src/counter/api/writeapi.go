@@ -1,8 +1,10 @@
 package api
 
 import (
+	"context"
 	"encoding/binary"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"time"
@@ -30,7 +32,59 @@ type WriteAPIWorker struct {
 	producer *kafka.Producer
 }
 
+func initKafka(config config.Config) error {
+	// Create an AdminClient instance
+	configMap := &kafka.ConfigMap{
+		"bootstrap.servers": config.KafkaAddr,
+	}
+	adminClient, err := kafka.NewAdminClient(configMap)
+	if err != nil {
+		fmt.Printf("Failed to create Admin client: %s\n", err)
+		return fmt.Errorf("error creating admin client: %w", err)
+	}
+	defer adminClient.Close()
+
+	// Define the new topic
+	topicName := config.KafkaTopic
+	numPartitions := 16
+	replicationFactor := 1
+
+	newTopic := kafka.TopicSpecification{
+		Topic:             topicName,
+		NumPartitions:     numPartitions,
+		ReplicationFactor: replicationFactor,
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	results, err := adminClient.CreateTopics(ctx, []kafka.TopicSpecification{newTopic}, kafka.SetAdminOperationTimeout(5*time.Second))
+	if err != nil {
+		fmt.Printf("Failed to create topic: %s\n", err)
+		return fmt.Errorf("error creating topic: %w", err)
+	}
+
+	// Process the results
+	for _, result := range results {
+		if result.Error.Code() != kafka.ErrNoError && result.Error.Code() != kafka.ErrTopicAlreadyExists {
+			log.Printf("Failed to create topic %s: %s\n", result.Topic, result.Error)
+
+			return fmt.Errorf("error creating topic: %w", result.Error)
+		} else if result.Error.Code() == kafka.ErrTopicAlreadyExists {
+			log.Printf("Topic %s already exists.\n", result.Topic)
+		} else {
+			log.Printf("Topic %s created successfully.\n", result.Topic)
+		}
+	}
+	return nil
+}
+
+// NewWriteAPIWorker creates a new write API worker
 func NewWriteAPIWorker(config config.Config) (*WriteAPIWorker, error) {
+	if err := initKafka(config); err != nil {
+		return nil, fmt.Errorf("error initializing kafka: %w", err)
+	}
+	log.Printf("Kafka initialized")
+
 	// create producer for sending kafka requests
 	producer, err := kafka.NewProducer(&kafka.ConfigMap{"bootstrap.servers": config.KafkaAddr})
 	if err != nil {

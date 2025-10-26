@@ -11,8 +11,9 @@ type Config struct {
 	KafkaTopic   string `mapstructure:"KAFKA_TOPIC"`
 	KafkaGroupID string `mapstructure:"KAFKA_GROUP_ID"`
 
-	CassandraAddr     []string `mapstructure:"CASSANDRA_ADDR"`
-	CassandraKeyspace string   `mapstructure:"CASSANDRA_KEYSPACE"`
+	CassandraAddr        []string `mapstructure:"CASSANDRA_ADDR"`
+	CassandraKeyspace    string   `mapstructure:"CASSANDRA_KEYSPACE"`
+	CassandraReplication int      `mapstructure:"CASSANDRA_REPLICATION"`
 
 	RedisServiceType string   `mapstructure:"REDIS_SERVICE_TYPE"`
 	RedisMasterName  string   `mapstructure:"REDIS_MASTER_NAME"`
@@ -30,8 +31,10 @@ func LoadDefaultConfig() (Config, error) {
 	viper.SetDefault("KAFKA_ADDR", "localhost:9092")
 	viper.SetDefault("KAFKA_TOPIC", "counter")
 	viper.SetDefault("KAFKA_GROUP_ID", "counter-group")
+
 	viper.SetDefault("CASSANDRA_ADDR", "localhost:9042")
 	viper.SetDefault("CASSANDRA_KEYSPACE", "counter")
+	viper.SetDefault("CASSANDRA_REPLICATION", "1")
 
 	viper.SetDefault("REDIS_SERVICE_TYPE", "sentinel")
 	viper.SetDefault("REDIS_MASTER_NAME", "mymaster")

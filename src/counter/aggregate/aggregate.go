@@ -93,7 +93,60 @@ type Aggregator struct {
 	partitions map[int32]*PartitionState
 }
 
+// InitCassandra initializes the cassandra keyspace and tables
+func initCassandra(config config.Config) error {
+	// create cassandra connection to system keyspace
+	cluster := gocql.NewCluster(config.CassandraAddr...)
+	cluster.Keyspace = "system"
+	cluster.Consistency = gocql.Quorum
+	session, err := cluster.CreateSession()
+	if err != nil {
+		return fmt.Errorf("error connecting to cassandra: %w", err)
+	}
+	defer session.Close()
+
+	// create keyspace
+	if err := session.Query(
+		fmt.Sprintf(`CREATE KEYSPACE IF NOT EXISTS %s WITH REPLICATION = { 'class' : 'SimpleStrategy', 'replication_factor' : %d };`,
+			config.CassandraKeyspace,
+			config.CassandraReplication,
+		)).Exec(); err != nil {
+		return fmt.Errorf("error creating keyspace: %w", err)
+	}
+	log.Printf("Keyspace %s created or already exists", config.CassandraKeyspace)
+
+	// connect to keyspace to create tables
+	cluster.Keyspace = config.CassandraKeyspace
+	ksSession, err := cluster.CreateSession()
+	if err != nil {
+		return fmt.Errorf("error connecting to cassandra keyspace %s: %w", config.CassandraKeyspace, err)
+	}
+	defer ksSession.Close()
+
+	// create partitions table
+	err = ksSession.Query(`CREATE TABLE IF NOT EXISTS partitions (partition int PRIMARY KEY, offset bigint);`).Exec()
+	if err != nil {
+		return fmt.Errorf("error creating partitions table: %w", err)
+	}
+	log.Printf("Table partitions created or already exists")
+
+	// create counters table
+	err = ksSession.Query(`CREATE TABLE IF NOT EXISTS counters (key text PRIMARY KEY, counter counter);`).Exec()
+	if err != nil {
+		return fmt.Errorf("error creating counters table: %w", err)
+	}
+	log.Printf("Table counters created or already exists")
+
+	log.Printf("Cassandra keyspace and tables initialized successfully")
+	return nil
+}
+
 func newAggregator(config config.Config) (*Aggregator, error) {
+	// init aggregator
+	if err := initCassandra(config); err != nil {
+		return nil, fmt.Errorf("error initializing cassandra: %w", err)
+	}
+
 	// create kafka connection
 	consumer, err := kafka.NewConsumer(&kafka.ConfigMap{
 		"bootstrap.servers":               config.KafkaAddr,
