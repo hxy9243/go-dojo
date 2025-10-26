@@ -24,7 +24,7 @@ type WriteAPIWorkerConfig struct {
 	KafkaTopic string
 }
 
-// WRite API worker receives event and
+// Write API worker receives event and
 type WriteAPIWorker struct {
 	mux      *http.ServeMux
 	producer *kafka.Producer

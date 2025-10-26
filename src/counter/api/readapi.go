@@ -1,7 +1,6 @@
 package api
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -125,96 +124,109 @@ func (worker *ReadAPIWorker) initHandlers() {
 
 		vars := r.URL.Query()
 		keyVar := vars.Get("key")
-		streamVar := vars.Get("stream")
 
-		var (
-			stream bool
-			err    error
-		)
 		if keyVar == "" {
 			w.WriteHeader(http.StatusBadRequest)
 			json.NewEncoder(w).Encode(map[string]any{"code": http.StatusBadRequest, "detail": "Key value not specified"})
 			return
 		}
-
-		if streamVar == "" {
-			stream = false
-		} else {
-			stream, err = strconv.ParseBool(streamVar)
-			if err != nil {
-				w.WriteHeader(http.StatusBadRequest)
-				json.NewEncoder(w).Encode(map[string]any{"code": http.StatusBadRequest, "detail": "Error parsing input request"})
-				return
-			}
-		}
-
-		if stream {
-			log.Printf("HTTP: streaming response for key %s", keyVar)
-
-			worker.stream(r.Context(), keyVar, r, w)
-			return
-		} else {
-			log.Printf("HTTP: returning response for key %s", keyVar)
-
-			worker.respond(r.Context(), keyVar, r, w)
-		}
+		worker.respond(r.Context(), keyVar, r, w)
 	})
+}
+
+func (worker *ReadAPIWorker) lockKey(ctx context.Context, key string) (bool, error) {
+	set, err := worker.redisClient.SetNX(
+		ctx,
+		key+".counter-lock",
+		worker.ID,
+		time.Duration(worker.config.RedisCacheTTLms)*time.Millisecond,
+	).Result()
+	if err != nil {
+		log.Printf("Error querying database: %s", err)
+		return false, fmt.Errorf("error locking key: %w", err)
+	}
+
+	return set, nil
+}
+
+func (worker *ReadAPIWorker) unlockKey(ctx context.Context, key string) (bool, error) {
+	// unlock if the worker's ID matches the lock
+	const query = `
+		local key = redis.call('GET', KEYS[1])
+		if key == ARGV[1] then
+			redis.call('DEL', KEYS[1])
+			return 1
+		else
+			return 0
+		end
+	`
+	redisScript := redis.NewScript(query)
+	result, err := redisScript.Run(
+		ctx, worker.redisClient, []string{key + ".counter-lock"}, worker.ID,
+	).Result()
+	if err != nil {
+		log.Printf("Error querying database: %s", err)
+		return false, fmt.Errorf("error unlocking key: %w", err)
+	}
+
+	return result.(int64) == 1, nil
+}
+
+func (worker *ReadAPIWorker) setCache(ctx context.Context, key string) (int64, error) {
+	var val int64
+	err := worker.dbsession.Query(`SELECT counter FROM counters WHERE key = ?`, key).WithContext(ctx).Scan(&val)
+	if err != nil {
+		log.Printf("Error querying database: %s", err)
+		return 0, fmt.Errorf("error querying database: %w", err)
+	}
+	// set cache value
+	err = worker.redisClient.Set(ctx, key, val, time.Duration(worker.config.RedisCacheTTLms)*time.Millisecond).Err()
+	if err != nil {
+		log.Printf("Error setting key: %s", err)
+		return 0, fmt.Errorf("error setting key: %w", err)
+	}
+	return val, nil
 }
 
 func (worker *ReadAPIWorker) readKey(ctx context.Context, key string) (int64, error) {
 	var valStr string
 
 	for {
-		log.Printf("reading key value: %s", key)
-
 		var err error
 		valStr, err = worker.redisClient.Get(ctx, key).Result()
-		if err != nil {
-			if err == redis.Nil {
-				// if err not exist, lock key in redis
-				set, err := worker.redisClient.SetNX(
-					ctx,
-					key+".counter-lock",
-					worker.ID,
-					time.Duration(worker.config.RedisCacheTTLms)*time.Millisecond,
-				).Result()
+
+		if err == nil {
+			break
+		}
+		if err == redis.Nil {
+			// if key not exist, populate the cache
+			// first lock the cache to prevent stampede
+			locked, err := worker.lockKey(ctx, key)
+			if err != nil {
+				log.Printf("Error querying database: %s", err)
+				return 0, fmt.Errorf("error locking key: %w", err)
+			}
+			if locked {
+				// if locked, query database and populate cache
+				val, err := worker.setCache(ctx, key)
 				if err != nil {
 					log.Printf("Error querying database: %s", err)
-					return 0, fmt.Errorf("error locking key: %w", err)
-				}
-				defer func() {
-					if err := worker.redisClient.Del(
-						ctx,
-						key+".counter-lock",
-					).Err(); err != nil {
+
+					if _, err := worker.unlockKey(ctx, key); err != nil {
 						log.Printf("Error deleting key: %s", err)
 					}
-				}()
-
-				if set {
-					// query database
-					var val int64
-					err := worker.dbsession.Query(`SELECT counter FROM counters WHERE key = ?`, key).WithContext(ctx).Scan(&val)
-					if err != nil {
-						log.Printf("Error querying database: %s", err)
-						return 0, fmt.Errorf("error querying database: %w", err)
-					}
-					// set cache value
-					err = worker.redisClient.Set(ctx, key, val, time.Duration(worker.config.RedisCacheTTLms)*time.Millisecond).Err()
-					if err != nil {
-						log.Printf("Error setting key: %s", err)
-						return 0, fmt.Errorf("error setting key: %w", err)
-					}
-					return val, nil
-				} else {
-					time.Sleep(10 * time.Millisecond)
-					continue
+					return 0, fmt.Errorf("error querying database: %w", err)
 				}
+				if _, err := worker.unlockKey(ctx, key); err != nil {
+					log.Printf("Error deleting key: %s", err)
+				}
+				return val, nil
 			} else {
-				return 0, fmt.Errorf("error reading key: %w", err)
+				time.Sleep(10 * time.Millisecond)
+				continue
 			}
 		}
-		break
+		return 0, fmt.Errorf("error reading key: %w", err)
 	}
 
 	val, err := strconv.ParseInt(valStr, 10, 64)
@@ -223,58 +235,6 @@ func (worker *ReadAPIWorker) readKey(ctx context.Context, key string) (int64, er
 	}
 
 	return val, nil
-}
-
-func (worker *ReadAPIWorker) watchKey(ctx context.Context, key string) (chan int64, error) {
-	ch := make(chan int64)
-
-	return ch, nil
-}
-
-// stream the results as SSE back to client
-func (worker *ReadAPIWorker) stream(ctx context.Context, keyVar string, r *http.Request, w http.ResponseWriter) {
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-	ch, err := worker.watchKey(ctx, keyVar)
-	if err != nil {
-		log.Printf("Error watching key: %s", err)
-
-		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(map[string]any{"code": http.StatusInternalServerError, "detail": "Error reading key"})
-		return
-	}
-
-	flusher := w.(http.Flusher)
-
-	for {
-		select {
-		case <-r.Context().Done():
-			close(ch)
-			return
-		case val := <-ch:
-			buffer := bytes.NewBuffer([]byte{})
-			encoder := json.NewEncoder(buffer)
-
-			if err := encoder.Encode(CounterResponse{Key: keyVar, Value: val}); err != nil {
-				log.Printf("Error encoding response: %s", err)
-
-				w.WriteHeader(http.StatusInternalServerError)
-
-				json.NewEncoder(w).Encode(map[string]any{"code": http.StatusInternalServerError, "detail": "Error encoding response"})
-				return
-			}
-
-			if _, err := fmt.Fprintf(w, "data: %s\n\n", buffer.String()); err != nil {
-				log.Printf("Error streaming response: %s", err)
-
-				w.WriteHeader(http.StatusInternalServerError)
-				json.NewEncoder(w).Encode(map[string]any{"code": http.StatusInternalServerError, "detail": "Error streaming response"})
-				return
-			}
-			flusher.Flush()
-		}
-	}
 }
 
 // directly send the result as JSON
