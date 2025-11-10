@@ -1,0 +1,81 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "counter-app.fullname" . }}-read-api
+  labels:
+    {{- include "counter-app.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.readApi.service.type }}
+  ports:
+    - port: {{ .Values.readApi.service.port }}
+      targetPort: http
+      protocol: TCP
+      name: http
+  selector:
+    {{- include "counter-app.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: read-api
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "counter-app.fullname" . }}-read-api
+  labels:
+    {{- include "counter-app.labels" . | nindent 4 }}
+    app.kubernetes.io/component: read-api
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "counter-app.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: read-api
+  template:
+    metadata:
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        {{- include "counter-app.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: read-api
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "counter-app.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: read-api
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["/app/main", "read-api"]
+          ports:
+            - name: http
+              containerPort: 8081
+              protocol: TCP
+          env:
+            - name: REDIS_SERVICE_TYPE
+              value: "standalone"
+            - name: REDIS_ADDR
+              value: "{{ .Release.Name }}-redis-master:6379"
+            - name: KAFKA_ADDR
+              value: "{{ .Release.Name }}-kafka:9092"
+            - name: CASSANDRA_ADDR
+              value: "{{ .Release.Name }}-cassandra:9042"
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

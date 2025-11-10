@@ -1,0 +1,104 @@
+# Default values for counter-app.
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+
+replicaCount: 1
+
+image:
+  repository: hxy9243/counter-worker
+  pullPolicy: IfNotPresent
+  # Overrides the image tag whose default is the chart appVersion.
+  tag: "0.0.3"
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  # Specifies whether a service account should be created
+  create: true
+  # Annotations to add to the service account
+  annotations: {}
+  # The name of the service account to use.
+  # If not set and create is true, a name is generated using the fullname template
+  name: ""
+
+podAnnotations: {}
+
+podSecurityContext: {}
+  # fsGroup: 2000
+
+securityContext: {}
+  # capabilities:
+  #   drop:
+  #   - ALL
+  # readOnlyRootFilesystem: true
+  # runAsNonRoot: true
+  # runAsUser: 1000
+
+readApi:
+  service:
+    type: LoadBalancer
+    port: 8081
+
+writeApi:
+  service:
+    type: LoadBalancer
+    port: 8080
+
+consumer:
+  replicaCount: 1
+
+resources: {}
+  # We usually recommend not to specify default resources and to leave this as a conscious
+  # choice for the user. This also increases chances charts run on environments with little
+  # resources, such as Minikube. If you do want to specify resources, uncomment the following
+  # lines, adjust them as necessary, and remove the curly braces after 'resources:'.
+  # limits:
+  #   cpu: 100m
+  #   memory: 128Mi
+  # requests:
+  #   cpu: 100m
+  #   memory: 128Mi
+
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 100
+  targetCPUUtilizationPercentage: 80
+  # targetMemoryUtilizationPercentage: 80
+
+nodeSelector: {}
+
+tolerations: []
+
+affinity: {}
+
+# Dependency configurations
+cassandra:
+  auth:
+    enabled: false
+  persistence:
+    size: 5Gi
+
+kafka:
+  # Kraft mode requires 1 replica
+  replicaCount: 1
+  kraft:
+    enabled: true
+  controller:
+    replicaCount: 1
+  broker:
+    replicaCount: 1
+  persistence:
+    size: 5Gi
+
+redis:
+  auth:
+    enabled: false
+  master:
+    persistence:
+      size: 5Gi
+  replica:
+    persistence:
+      size: 5Gi

@@ -1,0 +1,77 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "counter-app.fullname" . }}-write-api
+  labels:
+    {{- include "counter-app.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.writeApi.service.type }}
+  ports:
+    - port: {{ .Values.writeApi.service.port }}
+      targetPort: http
+      protocol: TCP
+      name: http
+  selector:
+    {{- include "counter-app.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: write-api
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "counter-app.fullname" . }}-write-api
+  labels:
+    {{- include "counter-app.labels" . | nindent 4 }}
+    app.kubernetes.io/component: write-api
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "counter-app.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: write-api
+  template:
+    metadata:
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        {{- include "counter-app.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: write-api
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "counter-app.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: write-api
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["/app/main", "write-api"]
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          env:
+            - name: KAFKA_ADDR
+              value: "{{ .Release.Name }}-kafka:9092"
+            - name: CASSANDRA_ADDR
+              value: "{{ .Release.Name }}-cassandra:9042"
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
