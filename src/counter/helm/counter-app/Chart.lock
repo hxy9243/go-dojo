@@ -1,12 +1,12 @@
 dependencies:
 - name: cassandra
   repository: https://charts.bitnami.com/bitnami
-  version: 10.12.1
+  version: 12.3.11
 - name: kafka
   repository: https://charts.bitnami.com/bitnami
-  version: 26.11.4
+  version: 32.4.3
 - name: redis
   repository: https://charts.bitnami.com/bitnami
-  version: 18.19.4
-digest: sha256:bf62f7f4eda842eaa3fc4a9e9b7d036fa6b24895f972259a9d760578198836c1
-generated: "2025-11-09T22:41:05.223843209-08:00"
+  version: 23.2.12
+digest: sha256:7b8256322e3d2f1a9dc38ead5ac01da39bfc4f465a84803cb57101362b607e57
+generated: "2025-11-24T21:06:14.954328999-08:00"
