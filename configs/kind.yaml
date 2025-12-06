@@ -1,0 +1,39 @@
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: mycluster
+
+nodes:
+  - role: control-plane
+    kubeadmConfigPatches:
+      - |
+        kind: InitConfiguration
+        nodeRegistration:
+          kubeletExtraArgs:
+            system-reserved: cpu=1000m,memory=512Mi
+            kube-reserved: cpu=1000m,memory=512Mi
+
+  - role: worker
+    # Node 1
+    kubeadmConfigPatches:
+      - |
+        kind: JoinConfiguration
+        nodeRegistration:
+          kubeletExtraArgs:
+            system-reserved: cpu=500m,memory=256Mi
+
+  - role: worker
+    # Node 2
+    kubeadmConfigPatches:
+      - |
+        kind: JoinConfiguration
+        nodeRegistration:
+          kubeletExtraArgs:
+            system-reserved: cpu=500m,memory=256Mi
+  - role: worker
+    # Node 2
+    kubeadmConfigPatches:
+      - |
+        kind: JoinConfiguration
+        nodeRegistration:
+          kubeletExtraArgs:
+            system-reserved: cpu=500m,memory=256Mi
