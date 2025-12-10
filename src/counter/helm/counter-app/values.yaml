@@ -5,7 +5,7 @@
 replicaCount: 3
 
 image:
-  repository: hxy9243/counter-worker
+  repository: hxy9243/counter-app
   pullPolicy: IfNotPresent
   # Overrides the image tag whose default is the chart appVersion.
   tag: "0.0.3"
@@ -76,12 +76,14 @@ affinity: {}
 
 # Dependency configurations
 cassandra:
+  enabled: true
   auth:
     enabled: false
   persistence:
-    size: 5Gi
+    size: 1Gi
 
 kafka:
+  enabled: true
   # Kraft mode requires 1 replica
   replicaCount: 1
   kraft:
@@ -91,14 +93,30 @@ kafka:
   broker:
     replicaCount: 1
   persistence:
-    size: 5Gi
+    size: 10Gi
 
 redis:
+  enabled: true
   auth:
     enabled: false
   master:
     persistence:
-      size: 5Gi
+  sentinel:
+    enabled: true
+    replicaCount: 3
+    masterSet: mymaster
+    quorum: 2
+    downAfterMilliseconds: 10000
+    failoverTimeout: 10000
+    parallelSyncs: 1
+  image:
+    repository: bitnami/redis
+    tag: 7.2.4 # Ensure this matches a valid version you found earlier or a compatible one
+    pullPolicy: IfNotPresent
+  resources: {}
+
+certManager:
+  enabled: true
   replica:
     persistence:
       size: 5Gi

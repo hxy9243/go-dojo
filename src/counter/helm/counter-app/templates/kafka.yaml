@@ -1,0 +1,51 @@
+{{- if .Values.kafka.enabled -}}
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaNodePool
+metadata:
+  name: {{ .Release.Name }}-dual-role
+  labels:
+    strimzi.io/cluster: {{ .Release.Name }}-my-kafka-cluster
+    {{- include "counter-app.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.kafka.replicaCount }}
+  roles:
+    - controller
+    - broker
+  storage:
+    type: jbod
+    volumes:
+      - id: 0
+        type: persistent-claim
+        size: {{ .Values.kafka.persistence.size }}
+        deleteClaim: false
+        kraftMetadata: shared
+---
+apiVersion: kafka.strimzi.io/v1
+kind: Kafka
+metadata:
+  name: {{ .Release.Name }}-my-kafka-cluster
+  labels:
+    {{- include "counter-app.labels" . | nindent 4 }}
+spec:
+  kafka:
+    version: 4.1.1
+    metadataVersion: 4.1-IV1
+    listeners:
+      - name: plain
+        port: 9092
+        type: internal
+        tls: false
+      - name: tls
+        port: 9093
+        type: internal
+        tls: true
+    config:
+      offsets.topic.replication.factor: 3
+      transaction.state.log.replication.factor: 3
+      transaction.state.log.min.isr: 3
+      default.replication.factor: 3
+      min.insync.replicas: 3
+  entityOperator:
+    topicOperator: {}
+    userOperator: {}
+{{- end }}

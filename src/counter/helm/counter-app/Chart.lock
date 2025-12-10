@@ -1,12 +1,15 @@
 dependencies:
-- name: cassandra
-  repository: https://charts.bitnami.com/bitnami
-  version: 12.3.11
-- name: kafka
-  repository: https://charts.bitnami.com/bitnami
-  version: 32.4.3
+- name: cert-manager
+  repository: https://charts.jetstack.io
+  version: v1.19.2
+- name: strimzi-kafka-operator
+  repository: https://strimzi.io/charts
+  version: 0.49.1
 - name: redis
   repository: https://charts.bitnami.com/bitnami
   version: 23.2.12
-digest: sha256:7b8256322e3d2f1a9dc38ead5ac01da39bfc4f465a84803cb57101362b607e57
-generated: "2025-11-24T21:06:14.954328999-08:00"
+- name: cass-operator
+  repository: https://helm.k8ssandra.io/stable
+  version: 0.62.1
+digest: sha256:763a8999df87c24abc213ec36fcfe3d907d99794db64a895eada015968ee2b66
+generated: "2025-12-10T00:45:33.275268526-08:00"

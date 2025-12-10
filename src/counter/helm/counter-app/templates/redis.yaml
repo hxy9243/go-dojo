@@ -1,0 +1,97 @@
+{{- if .Values.redis.enabled -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "counter-app.fullname" . }}-redis-sentinel
+  labels:
+    {{- include "counter-app.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.redis.sentinel.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "counter-app.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: redis-sentinel
+  template:
+    metadata:
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        {{- include "counter-app.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: redis-sentinel
+    spec:
+      {{- if .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml .Values.imagePullSecrets | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "counter-app.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: redis-sentinel
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: "{{ .Values.redis.image.repository }}:{{ .Values.redis.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: sentinel
+              containerPort: 26379
+              protocol: TCP
+          command:
+            - redis-sentinel
+          env:
+            - name: REDIS_MASTER_HOST
+              value: "{{ .Release.Name }}-redis-master"
+            - name: REDIS_MASTER_PORT
+              value: "6379"
+            - name: REDIS_SENTINEL_QUORUM
+              value: "{{ .Values.redis.sentinel.quorum }}"
+            - name: REDIS_SENTINEL_DOWN_AFTER_MILLISECONDS
+              value: "{{ .Values.redis.sentinel.downAfterMilliseconds }}"
+            - name: REDIS_SENTINEL_FAILOVER_TIMEOUT
+              value: "{{ .Values.redis.sentinel.failoverTimeout }}"
+            - name: REDIS_SENTINEL_PARALLEL_SYNCS
+              value: "{{ .Values.redis.sentinel.parallelSyncs }}"
+          livenessProbe:
+            tcpSocket:
+              port: 26379
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            tcpSocket:
+              port: 26379
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.redis.resources | nindent 12 }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "counter-app.fullname" . }}-redis-sentinel
+  labels:
+    {{- include "counter-app.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - port: 26379
+      targetPort: sentinel
+      protocol: TCP
+      name: sentinel
+  selector:
+    {{- include "counter-app.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: redis-sentinel
+{{- end }}
