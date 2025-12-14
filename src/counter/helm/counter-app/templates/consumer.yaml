@@ -25,7 +25,7 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      serviceAccountName: {{ include "counter-app.serviceAccountName" . }}
+      # serviceAccountName: {{ include "counter-app.serviceAccountName" . }}
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
       containers:
@@ -34,12 +34,12 @@ spec:
             {{- toYaml .Values.securityContext | nindent 12 }}
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
-          command: ["/app/main", "consumer"]
+          command: ["/worker", "consumer"]
           env:
             - name: KAFKA_ADDR
               value: "{{ .Release.Name }}-my-kafka-cluster-kafka-brokers:9092"
             - name: CASSANDRA_ADDR
-              value: "{{ .Release.Name }}-deployment-{{ .Release.Name }}-dc1-service:9042"
+              value: "{{ .Release.Name }}-development-{{ .Release.Name }}-dc1-service:9042"
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
       {{- with .Values.nodeSelector }}
