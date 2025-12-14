@@ -13,7 +13,7 @@ import (
 	"github.com/gocql/gocql"
 	"github.com/google/uuid"
 
-	"github.com/hxy9243/go-dojo/counter/config"
+	"github.com/hxy9243/go-dojo/counter/pkg/config"
 )
 
 type CounterResponse struct {

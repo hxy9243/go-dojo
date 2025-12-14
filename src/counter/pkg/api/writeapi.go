@@ -11,7 +11,7 @@ import (
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 
-	"github.com/hxy9243/go-dojo/counter/config"
+	"github.com/hxy9243/go-dojo/counter/pkg/config"
 )
 
 type EventRequest struct {

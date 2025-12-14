@@ -5,11 +5,11 @@ import (
 	"log"
 	"os"
 
-	"github.com/hxy9243/go-dojo/counter/aggregate"
-	"github.com/hxy9243/go-dojo/counter/api"
-	"github.com/spf13/cobra"
+	"github.com/hxy9243/go-dojo/counter/pkg/aggregate"
+	"github.com/hxy9243/go-dojo/counter/pkg/api"
+	"github.com/hxy9243/go-dojo/counter/pkg/config"
 
-	"github.com/hxy9243/go-dojo/counter/config"
+	"github.com/spf13/cobra"
 )
 
 var (
