@@ -85,13 +85,13 @@ cassandra:
 kafka:
   enabled: true
   # Kraft mode requires 1 replica
-  replicaCount: 1
+  replicas: 3
   kraft:
     enabled: true
   controller:
-    replicaCount: 1
+    replicaCount: 3
   broker:
-    replicaCount: 1
+    replicaCount: 3
   persistence:
     size: 10Gi
 

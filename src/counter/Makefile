@@ -39,4 +39,8 @@ deploy-helm: init-helm kind-load install-cert-manager
 	@echo "Deploying counter-app Helm chart..."
 	helm upgrade --install counter-app helm/counter-app/
 
-.PHONY: build-docker kind-load init-helm deploy-helm
+.PHONY: uninstall
+uninstall:
+	@echo "Uninstalling the cluster"
+	helm uninstall cert-manager
+	helm uninstall counter-app

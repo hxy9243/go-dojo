@@ -58,9 +58,9 @@ spec:
               protocol: TCP
           env:
             - name: KAFKA_ADDR
-              value: "{{ .Release.Name }}-kafka:9092"
+              value: "{{ .Release.Name }}-my-kafka-cluster-kafka-brokers:9092"
             - name: CASSANDRA_ADDR
-              value: "{{ .Release.Name }}-cassandra:9042"
+              value: "{{ .Release.Name }}-deployment-{{ .Release.Name }}-dc1-service:9042"
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
       {{- with .Values.nodeSelector }}
