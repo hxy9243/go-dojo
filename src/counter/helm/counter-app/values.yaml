@@ -85,7 +85,7 @@ cassandra:
 kafka:
   enabled: true
   # Kraft mode requires 1 replica
-  replicas: 3
+  replicaCount: 3
   kraft:
     enabled: true
   controller:
