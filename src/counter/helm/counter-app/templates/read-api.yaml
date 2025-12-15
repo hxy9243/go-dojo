@@ -60,7 +60,7 @@ spec:
           until nc -z {{ .Release.Name }}-development-{{ .Release.Name }}-dc1-service 9042; do echo "waiting for cassandra..."; sleep $INTERVAL; done
 {{- end }}
 {{- if .Values.waitForDependencies.checkRedis }}
-          until nc -z {{ .Release.Name }}-redis 6379; do echo "waiting for redis..."; sleep $INTERVAL; done
+          until nc -z {{ .Release.Name }}-redis 26379; do echo "waiting for redis..."; sleep $INTERVAL; done
 {{- end }}
 {{- if .Values.waitForDependencies.checkKafka }}
           until nc -z {{ .Release.Name }}-my-kafka-cluster-kafka-brokers 9092; do echo "waiting for kafka..."; sleep $INTERVAL; done
@@ -84,10 +84,16 @@ spec:
           env:
             - name: REDIS_SERVICE_TYPE
               value: "sentinel"
+            # connect to 26379 for sentinel connection
             - name: REDIS_ADDR
-              value: "{{ .Release.Name }}-redis-master:6379"
+              value: "{{ .Release.Name }}-redis:26379"
             - name: KAFKA_ADDR
               value: "{{ .Release.Name }}-my-kafka-cluster-kafka-brokers:9092"
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: counter-app-redis
+                  key: redis-password
             - name: CASSANDRA_ADDR
               value: "{{ .Release.Name }}-development-{{ .Release.Name }}-dc1-service:9042"
           resources:
