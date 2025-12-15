@@ -252,13 +252,15 @@ func (agg *Aggregator) processMessage(msg *kafka.Message) error {
 	// check for partition offset, skip if offset
 	partitionCount, err := agg.lookupPartition(partition)
 	if err != nil {
+		log.Printf("Error looking up partition: %s", err)
 		return fmt.Errorf("error looking up partition: %w", err)
 	}
 	if offset <= partitionCount.Offset {
+		log.Printf("Skipping offset: %d, potential replicated message detected", offset)
 		return nil
 	}
 
-	partitionCount.Offset = offset + 1
+	partitionCount.Offset = offset
 
 	existVal, ok := partitionCount.Counters[key]
 	if !ok {

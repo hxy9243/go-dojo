@@ -142,7 +142,7 @@ func (worker *ReadAPIWorker) lockKey(ctx context.Context, key string) (bool, err
 		time.Duration(worker.config.RedisCacheTTLms)*time.Millisecond,
 	).Result()
 	if err != nil {
-		log.Printf("Error querying database: %s", err)
+		log.Printf("Error querying redis server: %s", err)
 		return false, fmt.Errorf("error locking key: %w", err)
 	}
 
@@ -165,7 +165,7 @@ func (worker *ReadAPIWorker) unlockKey(ctx context.Context, key string) (bool, e
 		ctx, worker.redisClient, []string{key + ".counter-lock"}, worker.ID,
 	).Result()
 	if err != nil {
-		log.Printf("Error querying database: %s", err)
+		log.Printf("Error querying redis: %s", err)
 		return false, fmt.Errorf("error unlocking key: %w", err)
 	}
 
@@ -176,8 +176,8 @@ func (worker *ReadAPIWorker) setCache(ctx context.Context, key string) (int64, e
 	var val int64
 	err := worker.dbsession.Query(`SELECT counter FROM counters WHERE key = ?`, key).WithContext(ctx).Scan(&val)
 	if err != nil {
-		log.Printf("Error querying database: %s", err)
-		return 0, fmt.Errorf("error querying database: %w", err)
+		log.Printf("Error querying redis cache: %s", err)
+		return 0, fmt.Errorf("error querying redis cache: %w", err)
 	}
 	// set cache value
 	err = worker.redisClient.Set(ctx, key, val, time.Duration(worker.config.RedisCacheTTLms)*time.Millisecond).Err()
@@ -203,19 +203,19 @@ func (worker *ReadAPIWorker) readKey(ctx context.Context, key string) (int64, er
 			// first lock the cache to prevent stampede
 			locked, err := worker.lockKey(ctx, key)
 			if err != nil {
-				log.Printf("Error querying database: %s", err)
+				log.Printf("Error querying redis cache: %s", err)
 				return 0, fmt.Errorf("error locking key: %w", err)
 			}
 			if locked {
 				// if locked, query database and populate cache
 				val, err := worker.setCache(ctx, key)
 				if err != nil {
-					log.Printf("Error querying database: %s", err)
+					log.Printf("Error querying redis cache: %s", err)
 
 					if _, err := worker.unlockKey(ctx, key); err != nil {
 						log.Printf("Error deleting key: %s", err)
 					}
-					return 0, fmt.Errorf("error querying database: %w", err)
+					return 0, fmt.Errorf("error querying redis cache: %w", err)
 				}
 				if _, err := worker.unlockKey(ctx, key); err != nil {
 					log.Printf("Error deleting key: %s", err)
