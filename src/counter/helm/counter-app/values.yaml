@@ -135,3 +135,17 @@ certManager:
   replica:
     persistence:
       size: 5Gi
+
+# Configuration for initContainer that waits for external dependencies
+waitForDependencies:
+  enabled: true
+  # image used to perform simple TCP checks (must include nc/netcat or use a multi-tool image)
+  image: busybox
+  # total timeout in seconds (string to avoid YAML int formatting surprises in certain renderers)
+  timeout: "300"
+  # interval between checks in seconds
+  interval: 5
+  # toggle which services to check
+  checkCassandra: true
+  checkRedis: true
+  checkKafka: true

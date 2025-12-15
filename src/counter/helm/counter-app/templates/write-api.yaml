@@ -45,6 +45,30 @@ spec:
       # serviceAccountName: {{ include "counter-app.serviceAccountName" . }}
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- if .Values.waitForDependencies.enabled }}
+      initContainers:
+      - name: wait-for-deps
+        image: {{ .Values.waitForDependencies.image | quote }}
+        command:
+        - /bin/sh
+        - -c
+        - |
+          set -e
+          INTERVAL={{ .Values.waitForDependencies.interval }}
+{{- if .Values.waitForDependencies.checkCassandra }}
+          until nc -z {{ .Release.Name }}-development-{{ .Release.Name }}-dc1-service 9042; do echo "waiting for cassandra..."; sleep $INTERVAL; done
+{{- end }}
+{{- if .Values.waitForDependencies.checkRedis }}
+          until nc -z {{ .Release.Name }}-redis 6379; do echo "waiting for redis..."; sleep $INTERVAL; done
+{{- end }}
+{{- if .Values.waitForDependencies.checkKafka }}
+          until nc -z {{ .Release.Name }}-my-kafka-cluster-kafka-brokers 9092; do echo "waiting for kafka..."; sleep $INTERVAL; done
+{{- end }}
+          echo "dependencies are reachable"
+        env:
+        - name: TIMEOUT
+          value: "{{ .Values.waitForDependencies.timeout }}"
+      {{- end }}
       containers:
         - name: write-api
           securityContext:
