@@ -115,20 +115,6 @@ redis:
   replica:
     automountServiceAccountToken: true
 
-  # sentinel:
-  #   enabled: true
-  #   replicaCount: 3
-  #   masterSet: mymaster
-  #   quorum: 2
-  #   downAfterMilliseconds: 10000
-  #   failoverTimeout: 10000
-  #   parallelSyncs: 1
-  # image:
-  #   repository: bitnami/redis
-  #   tag: 7.2.4 # Ensure this matches a valid version you found earlier or a compatible one
-  #   pullPolicy: IfNotPresent
-  # resources: {}
-
 certManager:
   enabled: true
   installCRDs: true
