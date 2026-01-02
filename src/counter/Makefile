@@ -1,6 +1,10 @@
 KIND_CLUSTER_NAME ?= mycluster
 NAMESPACE ?= counter
 
+.PHONY: kind
+kind:
+	@echo "Building KIND cluster"
+	kind create cluster --config ../../configs/kind.yaml
 
 .PHONY: build-docker
 build-docker:
@@ -11,6 +15,11 @@ build-docker:
 kind-load: build-docker
 	@echo "Loading Docker image into Kind cluster '$(KIND_CLUSTER_NAME)'..."
 	kind load docker-image hxy9243/counter-app:latest --name $(KIND_CLUSTER_NAME)
+
+.PHONY: lint
+lint:
+	@echo "Running golangci-lint..."
+	golangci-lint run -v ./...
 
 .PHONY: build
 build: build-docker
