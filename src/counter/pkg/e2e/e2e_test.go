@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net/http"
 	"testing"
 	"time"
@@ -119,7 +119,7 @@ func pollCounter(eventKey string, expectedValue int64) (int64, error) {
 		}
 
 		var counterResp CounterResponse
-		body, err := ioutil.ReadAll(resp.Body)
+		body, err := io.ReadAll(resp.Body)
 		if err != nil {
 			return 0, fmt.Errorf("failed to read response body: %w", err)
 		}

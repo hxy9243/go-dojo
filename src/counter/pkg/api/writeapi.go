@@ -97,7 +97,9 @@ func NewWriteAPIWorker(config config.Config) (*WriteAPIWorker, error) {
 	mux.HandleFunc("/event", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "POST" {
 			w.WriteHeader(http.StatusMethodNotAllowed)
-			json.NewEncoder(w).Encode(map[string]any{"code": http.StatusMethodNotAllowed, "detail": "Method not allowed"})
+			if err := json.NewEncoder(w).Encode(map[string]any{"code": http.StatusMethodNotAllowed, "detail": "Method not allowed"}); err != nil {
+				log.Printf("Error encoding response: %s", err)
+			}
 			return
 		}
 
@@ -106,7 +108,9 @@ func NewWriteAPIWorker(config config.Config) (*WriteAPIWorker, error) {
 
 		if err := json.NewDecoder(r.Body).Decode(&event); err != nil {
 			w.WriteHeader(http.StatusBadRequest)
-			json.NewEncoder(w).Encode(map[string]any{"code": http.StatusBadRequest, "detail": "Error parsing input request"})
+			if err := json.NewEncoder(w).Encode(map[string]any{"code": http.StatusBadRequest, "detail": "Error parsing input request"}); err != nil {
+				log.Printf("Error encoding response: %s", err)
+			}
 			return
 		}
 
@@ -124,7 +128,9 @@ func NewWriteAPIWorker(config config.Config) (*WriteAPIWorker, error) {
 		}, nil); err != nil {
 			log.Printf("Error writing to kafka for %s: %d", event.EventKey, event.EventValue)
 			w.WriteHeader(http.StatusInternalServerError)
-			json.NewEncoder(w).Encode(map[string]any{"code": http.StatusInternalServerError, "detail": "Error writing to Kafka"})
+			if err := json.NewEncoder(w).Encode(map[string]any{"code": http.StatusInternalServerError, "detail": "Error writing to Kafka"}); err != nil {
+				log.Printf("Error encoding response: %s", err)
+			}
 			return
 		}
 

@@ -118,7 +118,9 @@ func (worker *ReadAPIWorker) initHandlers() {
 	worker.mux.HandleFunc("/counter", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "GET" {
 			w.WriteHeader(http.StatusMethodNotAllowed)
-			json.NewEncoder(w).Encode(map[string]any{"code": http.StatusMethodNotAllowed, "detail": "Method not allowed"})
+			if err := json.NewEncoder(w).Encode(map[string]any{"code": http.StatusMethodNotAllowed, "detail": "Method not allowed"}); err != nil {
+				log.Printf("Error encoding response: %s", err)
+			}
 			return
 		}
 
@@ -127,7 +129,9 @@ func (worker *ReadAPIWorker) initHandlers() {
 
 		if keyVar == "" {
 			w.WriteHeader(http.StatusBadRequest)
-			json.NewEncoder(w).Encode(map[string]any{"code": http.StatusBadRequest, "detail": "Key value not specified"})
+			if err := json.NewEncoder(w).Encode(map[string]any{"code": http.StatusBadRequest, "detail": "Key value not specified"}); err != nil {
+				log.Printf("Error encoding response: %s", err)
+			}
 			return
 		}
 		worker.respond(r.Context(), keyVar, r, w)
@@ -246,8 +250,12 @@ func (worker *ReadAPIWorker) respond(ctx context.Context, keyVar string, r *http
 		log.Printf("Error sending response: %s", err)
 
 		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(map[string]any{"code": http.StatusInternalServerError, "detail": "Error reading key"})
+		if err := json.NewEncoder(w).Encode(map[string]any{"code": http.StatusInternalServerError, "detail": "Error reading key"}); err != nil {
+			log.Printf("Error encoding response: %s", err)
+		}
 		return
 	}
-	json.NewEncoder(w).Encode(CounterResponse{Key: keyVar, Value: val})
+	if err := json.NewEncoder(w).Encode(CounterResponse{Key: keyVar, Value: val}); err != nil {
+		log.Printf("Error encoding response: %s", err)
+	}
 }
