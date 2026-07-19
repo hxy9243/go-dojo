@@ -1,10 +1,6 @@
-// Package runtime implements the minimal container execution: chroot into
-// a rootfs directory and exec a command with inherited stdio.
-//
-// The minimal instance uses chroot(2) directly — no namespaces, no
-// pivot_root, no cgroups. This is the simplest isolation that lets us
-// verify the rootfs extraction and command execution pipeline. The full
-// MVP will replace this with pivot_root + namespaces (spec §6.3, §6.4).
+// Package runtime implements container execution using user and mount namespaces:
+// unshares user and mount namespaces, chroots into a rootfs directory, and
+// execs a command with inherited stdio.
 //
 // This package is Linux-only.
 package runtime
@@ -22,17 +18,33 @@ import (
 // Stdio (stdin, stdout, stderr) is inherited by the child process.
 // The function returns the child's exit code as an error (nil for exit 0).
 //
-// Run requires root privileges for chroot(2).
+// Run unshares User and Mount namespaces (CLONE_NEWUSER | CLONE_NEWNS)
+// mapping the current user to root in the new namespace, allowing rootless chroot(2).
 func Run(rootfsDir string, command string, args ...string) error {
 	cmd := exec.Command(command, args...)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
-	// Set up chroot via SysProcAttr.
+	// Set up namespaces and chroot via SysProcAttr.
 	cmd.SysProcAttr = &syscall.SysProcAttr{
-		Chroot:  rootfsDir,
-		Setpgid: false,
+		Chroot:     rootfsDir,
+		Cloneflags: syscall.CLONE_NEWUSER | syscall.CLONE_NEWNS,
+		UidMappings: []syscall.SysProcIDMap{
+			{
+				ContainerID: 0,
+				HostID:      os.Getuid(),
+				Size:        1,
+			},
+		},
+		GidMappings: []syscall.SysProcIDMap{
+			{
+				ContainerID: 0,
+				HostID:      os.Getgid(),
+				Size:        1,
+			},
+		},
+		GidMappingsEnableSetgroups: false,
 	}
 	cmd.Dir = "/"
 
