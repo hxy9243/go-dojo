@@ -1,0 +1,24 @@
+[
+    {
+        "Config": "blobs/sha256/de7345b16e942e22044c6ba053020ec85ae879984860a9918517d54eb6cef851",
+        "RepoTags": [
+            "ubuntu:26.04"
+        ],
+        "Layers": [
+            "blobs/sha256/d6b1a90bccf18353db11e206211d1438050e64d14c56a48ae067131e0a3cc245",
+            "blobs/sha256/d85193ee52f1c6af3150f4f15bde65704cf6ec6f113dc3802940d62410eb8da5"
+        ],
+        "LayerSources": {
+            "sha256:d6b1a90bccf18353db11e206211d1438050e64d14c56a48ae067131e0a3cc245": {
+                "mediaType": "application/vnd.oci.image.layer.v1.tar",
+                "size": 111544320,
+                "digest": "sha256:d6b1a90bccf18353db11e206211d1438050e64d14c56a48ae067131e0a3cc245"
+            },
+            "sha256:d85193ee52f1c6af3150f4f15bde65704cf6ec6f113dc3802940d62410eb8da5": {
+                "mediaType": "application/vnd.oci.image.layer.v1.tar",
+                "size": 10240,
+                "digest": "sha256:d85193ee52f1c6af3150f4f15bde65704cf6ec6f113dc3802940d62410eb8da5"
+            }
+        }
+    }
+]

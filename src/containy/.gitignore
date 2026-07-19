@@ -1,0 +1,13 @@
+# Large binary artifacts — do not commit
+ubuntu/ubuntu.tar
+ubuntu/rootfs.tar
+ubuntu/blobs/sha256/rootfs/
+ubuntu/blobs/sha256/merged/
+ubuntu/blobs/sha256/work/
+ubuntu/blobs/sha256/d6b1a90bccf18353db11e206211d1438050e64d14c56a48ae067131e0a3cc245
+ubuntu/blobs/sha256/d85193ee52f1c6af3150f4f15bde65704cf6ec6f113dc3802940d62410eb8da5
+ubuntu/blobs/sha256/.rock/
+
+# Go build output
+containy
+*.exe
