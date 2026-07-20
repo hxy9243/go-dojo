@@ -1,52 +1,66 @@
-// Package runtime implements container execution using user and mount namespaces:
-// unshares user and mount namespaces, chroots into a rootfs directory, and
-// execs a command with inherited stdio.
+// Package runtime implements container execution using Linux namespaces:
+// unshares mount, PID, UTS, and IPC namespaces, chroots into a rootfs directory,
+// and execs a command with configured stdio/TTY.
 //
-// This package is Linux-only.
+// This package is Linux-only and requires root privileges.
 package runtime
 
 import (
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
+	"os/signal"
+	"path/filepath"
 	"syscall"
+	"unsafe"
 
 	"golang.org/x/sys/unix"
+	"golang.org/x/term"
 )
+
+// Options configures container execution.
+type Options struct {
+	RootfsDir   string
+	Command     string
+	Args        []string
+	Interactive bool // -i: keep stdin open
+	TTY         bool // -t: allocate a pseudo-TTY
+}
 
 // Run chroots into rootfsDir and executes the given command with args.
 // Stdio (stdin, stdout, stderr) is inherited by the child process.
 // The function returns the child's exit code as an error (nil for exit 0).
-//
-// Run unshares User and Mount namespaces (CLONE_NEWUSER | CLONE_NEWNS)
-// mapping the current user to root in the new namespace, allowing rootless chroot(2).
 func Run(rootfsDir string, command string, args ...string) error {
-	cmd := exec.Command(command, args...)
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	return RunWithOptions(Options{
+		RootfsDir:   rootfsDir,
+		Command:     command,
+		Args:        args,
+		Interactive: true,
+		TTY:         false,
+	})
+}
+
+// RunWithOptions chroots into rootfsDir and executes the command with the specified Options.
+func RunWithOptions(opts Options) error {
+	if os.Getuid() != 0 {
+		return errors.New("containy requires root privileges (run with sudo)")
+	}
+
+	cmd := exec.Command(opts.Command, opts.Args...)
 
 	// Set up namespaces and chroot via SysProcAttr.
 	cmd.SysProcAttr = &syscall.SysProcAttr{
-		Chroot:     rootfsDir,
-		Cloneflags: syscall.CLONE_NEWUSER | syscall.CLONE_NEWNS,
-		UidMappings: []syscall.SysProcIDMap{
-			{
-				ContainerID: 0,
-				HostID:      os.Getuid(),
-				Size:        1,
-			},
-		},
-		GidMappings: []syscall.SysProcIDMap{
-			{
-				ContainerID: 0,
-				HostID:      os.Getgid(),
-				Size:        1,
-			},
-		},
-		GidMappingsEnableSetgroups: false,
+		Chroot:     opts.RootfsDir,
+		Cloneflags: syscall.CLONE_NEWNS | syscall.CLONE_NEWPID | syscall.CLONE_NEWUTS | syscall.CLONE_NEWIPC,
 	}
 	cmd.Dir = "/"
+
+	termEnv := os.Getenv("TERM")
+	if termEnv == "" {
+		termEnv = "xterm-256color"
+	}
 
 	// Set a minimal environment.
 	cmd.Env = []string{
@@ -54,23 +68,142 @@ func Run(rootfsDir string, command string, args ...string) error {
 		"HOME=/root",
 		"USER=root",
 		"LOGNAME=root",
+		"TERM=" + termEnv,
 	}
 
-	if err := cmd.Run(); err != nil {
-		// Try to extract the exit code.
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			if status, ok := exitErr.Sys().(syscall.WaitStatus); ok {
-				if status.Signaled() {
-					return fmt.Errorf("signal: %v", status.Signal())
-				}
-				return fmt.Errorf("exit code %d", status.ExitStatus())
-			}
-			return err
+	// Ensure container has working DNS resolution in /etc/resolv.conf
+	if err := setupDNS(opts.RootfsDir); err != nil {
+		fmt.Fprintf(os.Stderr, "containy: warning: setup DNS: %v\n", err)
+	}
+
+	if opts.TTY {
+		return runWithTTY(cmd, opts)
+	}
+
+	if opts.Interactive {
+		cmd.Stdin = os.Stdin
+	}
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	return executeCmd(cmd)
+}
+
+func runWithTTY(cmd *exec.Cmd, opts Options) error {
+	masterFile, slaveFile, err := openPTY()
+	if err != nil {
+		return fmt.Errorf("openpty: %w", err)
+	}
+	defer masterFile.Close()
+	defer slaveFile.Close()
+
+	masterFd := int(masterFile.Fd())
+
+	cmd.Stdin = slaveFile
+	cmd.Stdout = slaveFile
+	cmd.Stderr = slaveFile
+	cmd.SysProcAttr.Setsid = true
+	cmd.SysProcAttr.Setctty = true
+	cmd.SysProcAttr.Ctty = 0
+
+	stdinFd := int(os.Stdin.Fd())
+	if term.IsTerminal(stdinFd) {
+		oldState, err := term.MakeRaw(stdinFd)
+		if err == nil {
+			defer func() { _ = term.Restore(stdinFd, oldState) }()
 		}
-		return fmt.Errorf("exec: %w", err)
+
+		if ws, err := unix.IoctlGetWinsize(stdinFd, unix.TIOCGWINSZ); err == nil {
+			_ = unix.IoctlSetWinsize(masterFd, unix.TIOCSWINSZ, ws)
+		}
+
+		sigChan := make(chan os.Signal, 1)
+		signal.Notify(sigChan, syscall.SIGWINCH)
+		defer signal.Stop(sigChan)
+
+		go func() {
+			for range sigChan {
+				if ws, err := unix.IoctlGetWinsize(stdinFd, unix.TIOCGWINSZ); err == nil {
+					_ = unix.IoctlSetWinsize(masterFd, unix.TIOCSWINSZ, ws)
+				}
+			}
+		}()
 	}
 
-	return nil
+	if opts.Interactive {
+		go func() {
+			_, _ = io.Copy(masterFile, os.Stdin)
+		}()
+	}
+
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("exec start: %w", err)
+	}
+
+	doneCopy := make(chan struct{})
+	go func() {
+		_, _ = io.Copy(os.Stdout, masterFile)
+		close(doneCopy)
+	}()
+
+	waitErr := cmd.Wait()
+	_ = slaveFile.Close()
+	<-doneCopy
+
+	return extractExitError(waitErr)
+}
+
+func openPTY() (master *os.File, slave *os.File, err error) {
+	master, err = os.OpenFile("/dev/ptmx", os.O_RDWR, 0)
+	if err != nil {
+		return nil, nil, fmt.Errorf("open /dev/ptmx: %w", err)
+	}
+
+	// Unlock slave PTY (unlockpt)
+	var unlock int = 0
+	_, _, errno := unix.Syscall(unix.SYS_IOCTL, master.Fd(), uintptr(unix.TIOCSPTLCK), uintptr(unsafe.Pointer(&unlock)))
+	if errno != 0 {
+		master.Close()
+		return nil, nil, fmt.Errorf("unlockpt (TIOCSPTLCK): %w", errno)
+	}
+
+	// Get slave PTY number (ptsname)
+	var ptyNum int
+	_, _, errno = unix.Syscall(unix.SYS_IOCTL, master.Fd(), uintptr(unix.TIOCGPTN), uintptr(unsafe.Pointer(&ptyNum)))
+	if errno != 0 {
+		master.Close()
+		return nil, nil, fmt.Errorf("ptsname (TIOCGPTN): %w", errno)
+	}
+
+	slavePath := fmt.Sprintf("/dev/pts/%d", ptyNum)
+	slave, err = os.OpenFile(slavePath, os.O_RDWR|unix.O_NOCTTY, 0)
+	if err != nil {
+		master.Close()
+		return nil, nil, fmt.Errorf("open slave %s: %w", slavePath, err)
+	}
+
+	return master, slave, nil
+}
+
+func executeCmd(cmd *exec.Cmd) error {
+	err := cmd.Run()
+	return extractExitError(err)
+}
+
+func extractExitError(err error) error {
+	if err == nil {
+		return nil
+	}
+	if exitErr, ok := err.(*exec.ExitError); ok {
+		if status, ok := exitErr.Sys().(syscall.WaitStatus); ok {
+			if status.Signaled() {
+				return fmt.Errorf("signal: %v", status.Signal())
+			}
+			return fmt.Errorf("exit code %d", status.ExitStatus())
+		}
+		return err
+	}
+	return fmt.Errorf("exec: %w", err)
 }
 
 // Chroot is a low-level helper that performs chroot + chdir. It is exported
@@ -83,4 +216,30 @@ func Chroot(rootfsDir string) error {
 		return fmt.Errorf("chdir /: %w", err)
 	}
 	return nil
+}
+
+func setupDNS(rootfsDir string) error {
+	etcDir := filepath.Join(rootfsDir, "etc")
+	if err := os.MkdirAll(etcDir, 0755); err != nil {
+		return fmt.Errorf("mkdir /etc: %w", err)
+	}
+
+	resolvPath := filepath.Join(etcDir, "resolv.conf")
+	info, err := os.Lstat(resolvPath)
+	if err == nil {
+		if info.Mode()&os.ModeSymlink != 0 || info.Size() == 0 {
+			_ = os.Remove(resolvPath)
+		} else {
+			return nil
+		}
+	}
+
+	content, err := os.ReadFile("/etc/resolv.conf")
+	if err == nil && len(content) > 0 {
+		if err := os.WriteFile(resolvPath, content, 0644); err == nil {
+			return nil
+		}
+	}
+
+	return os.WriteFile(resolvPath, []byte("nameserver 8.8.8.8\nnameserver 1.1.1.1\n"), 0644)
 }

@@ -25,7 +25,7 @@ func usage(w *os.File) {
 	fmt.Fprint(w, `containy — minimal container runtime
 
 Usage:
-  containy run <image|tar|rootfs-dir> <command> [args...]
+  containy run [options] <image|tar|rootfs-dir> <command> [args...]
   containy import <docker-image> <output-tar>
   containy help
 
@@ -34,6 +34,11 @@ Subcommands:
            the rootfs, and execute <command> in the foreground.
   import   Wrap `+"`docker save`"+` to produce a docker-save tar archive.
   help     Print this help message.
+
+Options for run:
+  -i, --interactive  Keep STDIN open even if not attached
+  -t, --tty          Allocate a pseudo-TTY
+  -it, -ti           Short for -i -t
 
 Run input:
   - A directory path is used directly as the rootfs.
@@ -70,14 +75,60 @@ func Run(args []string) error {
 
 // runCmd implements `containy run`.
 func runCmd(args []string) error {
-	if len(args) < 2 {
+	var interactive bool
+	var tty bool
+
+	idx := 0
+	for idx < len(args) {
+		arg := args[idx]
+		if arg == "--" {
+			idx++
+			break
+		}
+		if !strings.HasPrefix(arg, "-") || arg == "-" {
+			break
+		}
+
+		switch arg {
+		case "-i", "--interactive":
+			interactive = true
+		case "-t", "--tty":
+			tty = true
+		case "-it", "-ti":
+			interactive = true
+			tty = true
+		default:
+			if strings.HasPrefix(arg, "-") && !strings.HasPrefix(arg, "--") {
+				unknown := false
+				for _, c := range arg[1:] {
+					switch c {
+					case 'i':
+						interactive = true
+					case 't':
+						tty = true
+					default:
+						unknown = true
+					}
+				}
+				if !unknown {
+					idx++
+					continue
+				}
+			}
+			return fmt.Errorf("unknown flag %q", arg)
+		}
+		idx++
+	}
+
+	remaining := args[idx:]
+	if len(remaining) < 2 {
 		usage(os.Stderr)
 		return errors.New("run requires <image|tar|rootfs-dir> <command> [args...]")
 	}
 
-	source := args[0]
-	command := args[1]
-	commandArgs := args[2:]
+	source := remaining[0]
+	command := remaining[1]
+	commandArgs := remaining[2:]
 
 	fmt.Fprintln(os.Stderr, "containy is an educational runtime, not a secure sandbox.")
 	fmt.Fprintln(os.Stderr, "Run only trusted rootfs archives and trusted commands.")
@@ -91,7 +142,13 @@ func runCmd(args []string) error {
 	fmt.Fprintf(os.Stderr, "containy: rootfs ready at %s\n", rootfsDir)
 	fmt.Fprintf(os.Stderr, "containy: exec %s %s\n", command, strings.Join(commandArgs, " "))
 
-	return runtime.Run(rootfsDir, command, commandArgs...)
+	return runtime.RunWithOptions(runtime.Options{
+		RootfsDir:   rootfsDir,
+		Command:     command,
+		Args:        commandArgs,
+		Interactive: interactive,
+		TTY:         tty,
+	})
 }
 
 // importCmd implements `containy import`.
