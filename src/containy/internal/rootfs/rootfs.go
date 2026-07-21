@@ -161,7 +161,9 @@ func extractLayer(layerBytes []byte, destDir string) error {
 			if err := os.MkdirAll(targetPath, os.FileMode(hdr.Mode)); err != nil {
 				return fmt.Errorf("mkdir %s: %w", name, err)
 			}
-			os.Chmod(targetPath, os.FileMode(hdr.Mode))
+			if err := restoreMetadata(targetPath, hdr, false); err != nil {
+				return fmt.Errorf("restore directory metadata for %s: %w", name, err)
+			}
 
 		case tar.TypeReg, tar.TypeRegA:
 			if err := os.MkdirAll(filepath.Dir(targetPath), 0o755); err != nil {
@@ -175,8 +177,12 @@ func extractLayer(layerBytes []byte, destDir string) error {
 				out.Close()
 				return fmt.Errorf("write %s: %w", name, err)
 			}
-			out.Close()
-			os.Chmod(targetPath, os.FileMode(hdr.Mode))
+			if err := out.Close(); err != nil {
+				return fmt.Errorf("close %s: %w", name, err)
+			}
+			if err := restoreMetadata(targetPath, hdr, false); err != nil {
+				return fmt.Errorf("restore file metadata for %s: %w", name, err)
+			}
 
 		case tar.TypeSymlink:
 			if err := os.MkdirAll(filepath.Dir(targetPath), 0o755); err != nil {
@@ -185,6 +191,9 @@ func extractLayer(layerBytes []byte, destDir string) error {
 			os.Remove(targetPath)
 			if err := os.Symlink(hdr.Linkname, targetPath); err != nil {
 				return fmt.Errorf("symlink %s → %s: %w", name, hdr.Linkname, err)
+			}
+			if err := restoreMetadata(targetPath, hdr, true); err != nil {
+				return fmt.Errorf("restore symlink metadata for %s: %w", name, err)
 			}
 
 		case tar.TypeLink:
@@ -196,12 +205,50 @@ func extractLayer(layerBytes []byte, destDir string) error {
 			if err := copyFile(linkSrc, targetPath); err != nil {
 				return fmt.Errorf("hardlink %s → %s: %w", name, hdr.Linkname, err)
 			}
+			if err := restoreMetadata(targetPath, hdr, false); err != nil {
+				return fmt.Errorf("restore hardlink metadata for %s: %w", name, err)
+			}
 
 		default:
 			// Skip unsupported types (sockets, fifos, devices, etc.)
 		}
 	}
 
+	return nil
+}
+
+// restoreMetadata applies the numeric ownership and mode stored in a layer's
+// tar header. Linux authorizes filesystem access using these IDs; names such
+// as _apt are only /etc/passwd lookups. A rootful container runtime therefore
+// must preserve the IDs exactly as recorded in the image.
+func restoreMetadata(path string, hdr *tar.Header, symlink bool) error {
+	// Extract is also used by unprivileged unit tests. Only Containy's rootful
+	// execution path can faithfully restore ownership; mode restoration remains
+	// useful and valid for every caller.
+	if os.Geteuid() != 0 {
+		if symlink {
+			return nil
+		}
+		if err := os.Chmod(path, os.FileMode(hdr.Mode)); err != nil {
+			return fmt.Errorf("chmod %04o: %w", hdr.Mode, err)
+		}
+		return nil
+	}
+
+	if symlink {
+		if err := os.Lchown(path, hdr.Uid, hdr.Gid); err != nil {
+			return fmt.Errorf("lchown %d:%d: %w", hdr.Uid, hdr.Gid, err)
+		}
+		return nil
+	}
+
+	// Chown clears set-ID bits, so restore the mode afterwards.
+	if err := os.Chown(path, hdr.Uid, hdr.Gid); err != nil {
+		return fmt.Errorf("chown %d:%d: %w", hdr.Uid, hdr.Gid, err)
+	}
+	if err := os.Chmod(path, os.FileMode(hdr.Mode)); err != nil {
+		return fmt.Errorf("chmod %04o: %w", hdr.Mode, err)
+	}
 	return nil
 }
 

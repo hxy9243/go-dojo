@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 )
 
@@ -49,6 +50,8 @@ type layerEntry struct {
 	Content  string
 	Type     byte
 	Mode     int64
+	UID      int
+	GID      int
 	Linkname string
 }
 
@@ -71,6 +74,8 @@ func makeLayerTar(t *testing.T, entries []layerEntry) []byte {
 			Mode:     mode,
 			Size:     int64(len(e.Content)),
 			Typeflag: typ,
+			Uid:      e.UID,
+			Gid:      e.GID,
 			Linkname: e.Linkname,
 		}
 		if err := tw.WriteHeader(hdr); err != nil {
@@ -145,6 +150,49 @@ func TestExtract_SingleLayer(t *testing.T) {
 	}
 	if info.Mode()&0o111 == 0 {
 		t.Errorf("bin/hello should be executable, mode=%v", info.Mode())
+	}
+}
+
+func TestExtract_PreservesNumericOwnership(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("ownership restoration requires root privileges")
+	}
+
+	const aptUID = 42
+	const aptGID = 65534
+	layerData := makeLayerTar(t, []layerEntry{
+		{Name: "var/lib/apt/lists/partial/", Type: tar.TypeDir, Mode: 0o700, UID: aptUID, GID: aptGID},
+	})
+	manifest := dockerManifest{{Layers: []string{"layer/layer.tar"}}}
+	tarData := makeDockerSaveTar(t, map[string][]byte{"layer/layer.tar": layerData}, manifest)
+
+	tmpFile, err := os.CreateTemp("", "containy-test-*.tar")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(tmpFile.Name())
+	if _, err := tmpFile.Write(tarData); err != nil {
+		t.Fatal(err)
+	}
+	if err := tmpFile.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	destDir := t.TempDir()
+	if err := Extract(tmpFile.Name(), destDir); err != nil {
+		t.Fatalf("Extract failed: %v", err)
+	}
+
+	info, err := os.Stat(filepath.Join(destDir, "var", "lib", "apt", "lists", "partial"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		t.Fatal("expected syscall.Stat_t")
+	}
+	if stat.Uid != aptUID || stat.Gid != aptGID {
+		t.Errorf("ownership = %d:%d, want %d:%d", stat.Uid, stat.Gid, aptUID, aptGID)
 	}
 }
 
