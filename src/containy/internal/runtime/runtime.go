@@ -71,9 +71,9 @@ func RunWithOptions(opts Options) error {
 		"TERM=" + termEnv,
 	}
 
-	// Ensure container has working DNS resolution in /etc/resolv.conf
-	if err := setupDNS(opts.RootfsDir); err != nil {
-		fmt.Fprintf(os.Stderr, "containy: warning: setup DNS: %v\n", err)
+	// Provide resolver configuration at the target used by OCI image resolv.conf symlinks.
+	if err := setupResolvConf(opts.RootfsDir); err != nil {
+		fmt.Fprintf(os.Stderr, "containy: warning: setup /run: %v\n", err)
 	}
 
 	if opts.TTY {
@@ -218,28 +218,23 @@ func Chroot(rootfsDir string) error {
 	return nil
 }
 
-func setupDNS(rootfsDir string) error {
-	etcDir := filepath.Join(rootfsDir, "etc")
-	if err := os.MkdirAll(etcDir, 0755); err != nil {
-		return fmt.Errorf("mkdir /etc: %w", err)
+// Setup /etc/resolv.conf inside the container
+func setupResolvConf(rootfsDir string) error {
+	const resolvConf = "/etc/resolv.conf"
+	const fallbackResolverConfig = "nameserver 8.8.8.8\nnameserver 1.1.1.1\n"
+
+	stubResolverTarget := filepath.Join(rootfsDir, resolvConf)
+	if err := os.MkdirAll(filepath.Dir(stubResolverTarget), 0755); err != nil {
+		return fmt.Errorf("mkdir /run/systemd/resolve: %w", err)
 	}
 
-	resolvPath := filepath.Join(etcDir, "resolv.conf")
-	info, err := os.Lstat(resolvPath)
-	if err == nil {
-		if info.Mode()&os.ModeSymlink != 0 || info.Size() == 0 {
-			_ = os.Remove(resolvPath)
-		} else {
-			return nil
-		}
+	confContent, err := os.ReadFile("/run/systemd/resolve/resolv.conf")
+	if err != nil || len(confContent) == 0 {
+		confContent = []byte(fallbackResolverConfig)
+	}
+	if err := os.WriteFile(stubResolverTarget, confContent, 0644); err != nil {
+		return fmt.Errorf("write stub resolver configuration: %w", err)
 	}
 
-	content, err := os.ReadFile("/etc/resolv.conf")
-	if err == nil && len(content) > 0 {
-		if err := os.WriteFile(resolvPath, content, 0644); err == nil {
-			return nil
-		}
-	}
-
-	return os.WriteFile(resolvPath, []byte("nameserver 8.8.8.8\nnameserver 1.1.1.1\n"), 0644)
+	return nil
 }

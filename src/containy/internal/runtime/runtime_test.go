@@ -24,6 +24,23 @@ func TestOpenPTY(t *testing.T) {
 	}
 }
 
+func TestSetupRunDir(t *testing.T) {
+	rootfsDir := t.TempDir()
+
+	if err := setupResolvConf(rootfsDir); err != nil {
+		t.Fatalf("setupResolvConf() failed: %v", err)
+	}
+
+	resolvConf := filepath.Join(rootfsDir, "/etc/resolv.conf")
+	resolverConfig, err := os.ReadFile(resolvConf)
+	if err != nil {
+		t.Fatalf("read stub resolver configuration: %v", err)
+	}
+	if len(resolverConfig) == 0 {
+		t.Fatal("expected non-empty stub resolver configuration")
+	}
+}
+
 func TestRunWithOptions_Basic(t *testing.T) {
 	if os.Getuid() != 0 {
 		t.Skip("Skipping runtime test: requires root privileges")
