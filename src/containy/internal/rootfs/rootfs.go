@@ -45,6 +45,13 @@ func Extract(tarPath string, destDir string) error {
 	if err := os.MkdirAll(destDir, 0o755); err != nil {
 		return fmt.Errorf("create dest dir %s: %w", destDir, err)
 	}
+	// Callers commonly provide a directory created by os.MkdirTemp, which is
+	// mode 0700. MkdirAll does not update an existing directory's mode, and that
+	// directory becomes / after chroot. Normalize it so privilege-dropping
+	// processes can traverse the container root.
+	if err := os.Chmod(destDir, 0o755); err != nil {
+		return fmt.Errorf("set rootfs directory permissions for %s: %w", destDir, err)
+	}
 
 	// Read the outer tar (docker-save format).
 	// We need two passes: first to find manifest.json, then to extract
