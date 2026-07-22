@@ -116,3 +116,117 @@ func TestRunWithOptions_TTY(t *testing.T) {
 		t.Fatalf("RunWithOptions TTY failed: %v", err)
 	}
 }
+
+func TestApplyMounts_Validation(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Missing source
+	_, err := applyMounts(tmpDir, []Mount{
+		{Source: filepath.Join(tmpDir, "nonexistent"), Destination: "/data"},
+	})
+	if err == nil {
+		t.Error("expected error for non-existent source path")
+	}
+
+	// Relative destination
+	hostSource := filepath.Join(tmpDir, "src")
+	_ = os.MkdirAll(hostSource, 0755)
+	_, err = applyMounts(tmpDir, []Mount{
+		{Source: hostSource, Destination: "data"},
+	})
+	if err == nil {
+		t.Error("expected error for relative destination path")
+	}
+}
+
+func TestRunWithOptions_DirectoryMount(t *testing.T) {
+	if os.Getuid() != 0 {
+		t.Skip("Skipping runtime test: requires root privileges")
+	}
+
+	tmpDir := t.TempDir()
+	_ = os.MkdirAll(filepath.Join(tmpDir, "bin"), 0755)
+	shPath, err := os.Readlink("/bin/sh")
+	if err == nil {
+		_ = os.Symlink(shPath, filepath.Join(tmpDir, "bin", "sh"))
+	}
+
+	hostDir := t.TempDir()
+	sampleFile := filepath.Join(hostDir, "hello.txt")
+	if err := os.WriteFile(sampleFile, []byte("hello host"), 0644); err != nil {
+		t.Fatalf("write sample file: %v", err)
+	}
+
+	opts := Options{
+		RootfsDir: tmpDir,
+		Command:   "/bin/sh",
+		Args:      []string{"-c", "test \"$(cat /mnt/host/hello.txt)\" = \"hello host\""},
+		Mounts: []Mount{
+			{Source: hostDir, Destination: "/mnt/host", ReadOnly: false},
+		},
+	}
+
+	if err := RunWithOptions(opts); err != nil {
+		t.Fatalf("directory mount test failed: %v", err)
+	}
+}
+
+func TestRunWithOptions_FileMount(t *testing.T) {
+	if os.Getuid() != 0 {
+		t.Skip("Skipping runtime test: requires root privileges")
+	}
+
+	tmpDir := t.TempDir()
+	_ = os.MkdirAll(filepath.Join(tmpDir, "bin"), 0755)
+	shPath, err := os.Readlink("/bin/sh")
+	if err == nil {
+		_ = os.Symlink(shPath, filepath.Join(tmpDir, "bin", "sh"))
+	}
+
+	hostFile := filepath.Join(t.TempDir(), "config.txt")
+	if err := os.WriteFile(hostFile, []byte("key=value"), 0644); err != nil {
+		t.Fatalf("write host file: %v", err)
+	}
+
+	opts := Options{
+		RootfsDir: tmpDir,
+		Command:   "/bin/sh",
+		Args:      []string{"-c", "test \"$(cat /etc/app/config.txt)\" = \"key=value\""},
+		Mounts: []Mount{
+			{Source: hostFile, Destination: "/etc/app/config.txt", ReadOnly: false},
+		},
+	}
+
+	if err := RunWithOptions(opts); err != nil {
+		t.Fatalf("file mount test failed: %v", err)
+	}
+}
+
+func TestRunWithOptions_ReadOnlyMount(t *testing.T) {
+	if os.Getuid() != 0 {
+		t.Skip("Skipping runtime test: requires root privileges")
+	}
+
+	tmpDir := t.TempDir()
+	_ = os.MkdirAll(filepath.Join(tmpDir, "bin"), 0755)
+	shPath, err := os.Readlink("/bin/sh")
+	if err == nil {
+		_ = os.Symlink(shPath, filepath.Join(tmpDir, "bin", "sh"))
+	}
+
+	hostDir := t.TempDir()
+
+	opts := Options{
+		RootfsDir: tmpDir,
+		Command:   "/bin/sh",
+		Args:      []string{"-c", "touch /mnt/ro/newfile"},
+		Mounts: []Mount{
+			{Source: hostDir, Destination: "/mnt/ro", ReadOnly: true},
+		},
+	}
+
+	err = RunWithOptions(opts)
+	if err == nil {
+		t.Fatal("expected error when writing to read-only bind mount, got nil")
+	}
+}

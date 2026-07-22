@@ -3,16 +3,19 @@
 // The minimal instance supports three subcommands:
 //
 //   - run:     extract a Docker image / docker-save tar / rootfs dir and
-//              chroot into it to run a command in the foreground.
+//     chroot into it to run a command in the foreground.
 //   - import:  wrap `docker save` to produce a docker-save tar from an image.
 //   - help:    print usage.
 package cmd
 
 import (
 	"errors"
+	"flag"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/hxy9243/go-dojo/containy/internal/docker"
@@ -20,8 +23,9 @@ import (
 	"github.com/hxy9243/go-dojo/containy/internal/runtime"
 )
 
-// usage prints the containy CLI help text.
-func usage(w *os.File) {
+// usage prints the containy CLI help text. The options section is rendered by
+// flag.FlagSet so it always reflects the flags accepted by runCmd.
+func usage(w io.Writer) {
 	fmt.Fprint(w, `containy — minimal container runtime
 
 Usage:
@@ -36,9 +40,9 @@ Subcommands:
   help     Print this help message.
 
 Options for run:
-  -i, --interactive  Keep STDIN open even if not attached
-  -t, --tty          Allocate a pseudo-TTY
-  -it, -ti           Short for -i -t
+`)
+	printFlagDefaults(newRunFlagSet(io.Discard, w, &runOptions{}), w)
+	fmt.Fprint(w, `
 
 Run input:
   - A directory path is used directly as the rootfs.
@@ -73,54 +77,110 @@ func Run(args []string) error {
 	}
 }
 
-// runCmd implements `containy run`.
-func runCmd(args []string) error {
-	var interactive bool
-	var tty bool
+type runOptions struct {
+	interactive bool
+	tty         bool
+	mounts      []runtime.Mount
+}
 
-	idx := 0
-	for idx < len(args) {
-		arg := args[idx]
-		if arg == "--" {
-			idx++
-			break
-		}
-		if !strings.HasPrefix(arg, "-") || arg == "-" {
-			break
-		}
+// volumeFlag implements flag.Value and appends each -v/--volume occurrence.
+type volumeFlag struct {
+	mounts *[]runtime.Mount
+}
 
-		switch arg {
-		case "-i", "--interactive":
-			interactive = true
-		case "-t", "--tty":
-			tty = true
-		case "-it", "-ti":
-			interactive = true
-			tty = true
-		default:
-			if strings.HasPrefix(arg, "-") && !strings.HasPrefix(arg, "--") {
-				unknown := false
-				for _, c := range arg[1:] {
-					switch c {
-					case 'i':
-						interactive = true
-					case 't':
-						tty = true
-					default:
-						unknown = true
-					}
-				}
-				if !unknown {
-					idx++
-					continue
-				}
-			}
-			return fmt.Errorf("unknown flag %q", arg)
-		}
-		idx++
+func (v volumeFlag) String() string { return "" }
+
+func (v volumeFlag) Set(spec string) error {
+	mount, err := parseVolumeFlag(spec)
+	if err != nil {
+		return fmt.Errorf("invalid volume specification: %w", err)
+	}
+	*v.mounts = append(*v.mounts, mount)
+	return nil
+}
+
+// boolPairFlag lets -it and -ti remain boolean flags while using flag.FlagSet.
+type boolPairFlag struct {
+	first  *bool
+	second *bool
+}
+
+func (f boolPairFlag) String() string { return "false" }
+
+func (f boolPairFlag) Set(value string) error {
+	enabled, err := strconv.ParseBool(value)
+	if err != nil {
+		return err
+	}
+	*f.first = enabled
+	*f.second = enabled
+	return nil
+}
+
+func (boolPairFlag) IsBoolFlag() bool { return true }
+
+func newRunFlagSet(parseOutput, helpOutput io.Writer, options *runOptions) *flag.FlagSet {
+	flags := flag.NewFlagSet("containy run", flag.ContinueOnError)
+	flags.SetOutput(parseOutput)
+
+	flags.BoolVar(&options.interactive, "i", false, "Keep STDIN open even if not attached")
+	flags.BoolVar(&options.interactive, "interactive", false, "Keep STDIN open even if not attached")
+	flags.BoolVar(&options.tty, "t", false, "Allocate a pseudo-TTY")
+	flags.BoolVar(&options.tty, "tty", false, "Allocate a pseudo-TTY")
+	flags.Var(boolPairFlag{&options.interactive, &options.tty}, "it", "Short for -i -t")
+	flags.Var(boolPairFlag{&options.interactive, &options.tty}, "ti", "Short for -i -t")
+	flags.Var(volumeFlag{&options.mounts}, "v", "Bind mount host path into container (`<host>:<container>[:ro|rw]`)")
+	flags.Var(volumeFlag{&options.mounts}, "volume", "Bind mount host path into container (`<host>:<container>[:ro|rw]`)")
+
+	flags.Usage = func() {
+		fmt.Fprintln(helpOutput, "Usage: containy run [options] <image|tar|rootfs-dir> <command> [args...]")
+		fmt.Fprintln(helpOutput, "\nOptions:")
+		printFlagDefaults(flags, helpOutput)
 	}
 
-	remaining := args[idx:]
+	return flags
+}
+
+func printFlagDefaults(flags *flag.FlagSet, output io.Writer) {
+	originalOutput := flags.Output()
+	flags.SetOutput(output)
+	flags.PrintDefaults()
+	flags.SetOutput(originalOutput)
+}
+
+// formatRunFlagError retains the CLI's established error messages while the
+// parsing and validation itself is delegated to flag.FlagSet.
+func formatRunFlagError(err error, args []string) error {
+	const unknownPrefix = "flag provided but not defined: -"
+	if strings.HasPrefix(err.Error(), unknownPrefix) {
+		name := strings.TrimPrefix(err.Error(), unknownPrefix)
+		for _, arg := range args {
+			providedName := strings.SplitN(strings.TrimLeft(arg, "-"), "=", 2)[0]
+			if providedName == name {
+				return fmt.Errorf("unknown flag %q", arg)
+			}
+		}
+	}
+
+	if err.Error() == "flag needs an argument: -v" || err.Error() == "flag needs an argument: -volume" {
+		return errors.New("flag -v/--volume requires an argument")
+	}
+
+	return err
+}
+
+// runCmd implements `containy run`.
+func runCmd(args []string) error {
+	options := runOptions{}
+	flags := newRunFlagSet(os.Stderr, os.Stdout, &options)
+	if err := flags.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
+		return formatRunFlagError(err, args)
+	}
+
+	remaining := flags.Args()
 	if len(remaining) < 2 {
 		usage(os.Stderr)
 		return errors.New("run requires <image|tar|rootfs-dir> <command> [args...]")
@@ -146,9 +206,56 @@ func runCmd(args []string) error {
 		RootfsDir:   rootfsDir,
 		Command:     command,
 		Args:        commandArgs,
-		Interactive: interactive,
-		TTY:         tty,
+		Interactive: options.interactive,
+		TTY:         options.tty,
+		Mounts:      options.mounts,
 	})
+}
+
+func parseVolumeFlag(spec string) (runtime.Mount, error) {
+	parts := strings.Split(spec, ":")
+	if len(parts) < 2 || len(parts) > 3 {
+		return runtime.Mount{}, fmt.Errorf("invalid volume format %q, expected <host>:<container>[:ro|rw]", spec)
+	}
+
+	hostPath := parts[0]
+	containerPath := parts[1]
+
+	if hostPath == "" {
+		return runtime.Mount{}, fmt.Errorf("host source path cannot be empty in %q", spec)
+	}
+
+	absHost, err := filepath.Abs(hostPath)
+	if err != nil {
+		return runtime.Mount{}, fmt.Errorf("resolve host path %q: %w", hostPath, err)
+	}
+
+	if containerPath == "" || !strings.HasPrefix(containerPath, "/") {
+		return runtime.Mount{}, fmt.Errorf("container destination %q must be an absolute path", containerPath)
+	}
+
+	cleanContainer := filepath.Clean(containerPath)
+	if !filepath.IsAbs(cleanContainer) {
+		return runtime.Mount{}, fmt.Errorf("invalid container path %q", containerPath)
+	}
+
+	readOnly := false
+	if len(parts) == 3 {
+		switch parts[2] {
+		case "ro":
+			readOnly = true
+		case "rw":
+			readOnly = false
+		default:
+			return runtime.Mount{}, fmt.Errorf("invalid volume mode %q in %q (must be ro or rw)", parts[2], spec)
+		}
+	}
+
+	return runtime.Mount{
+		Source:      absHost,
+		Destination: cleanContainer,
+		ReadOnly:    readOnly,
+	}, nil
 }
 
 // importCmd implements `containy import`.

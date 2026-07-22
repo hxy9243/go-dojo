@@ -222,19 +222,6 @@ func extractLayer(layerBytes []byte, destDir string) error {
 // as _apt are only /etc/passwd lookups. A rootful container runtime therefore
 // must preserve the IDs exactly as recorded in the image.
 func restoreMetadata(path string, hdr *tar.Header, symlink bool) error {
-	// Extract is also used by unprivileged unit tests. Only Containy's rootful
-	// execution path can faithfully restore ownership; mode restoration remains
-	// useful and valid for every caller.
-	if os.Geteuid() != 0 {
-		if symlink {
-			return nil
-		}
-		if err := os.Chmod(path, os.FileMode(hdr.Mode)); err != nil {
-			return fmt.Errorf("chmod %04o: %w", hdr.Mode, err)
-		}
-		return nil
-	}
-
 	if symlink {
 		if err := os.Lchown(path, hdr.Uid, hdr.Gid); err != nil {
 			return fmt.Errorf("lchown %d:%d: %w", hdr.Uid, hdr.Gid, err)

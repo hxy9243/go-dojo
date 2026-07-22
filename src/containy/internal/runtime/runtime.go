@@ -27,6 +27,7 @@ type Options struct {
 	Args        []string
 	Interactive bool // -i: keep stdin open
 	TTY         bool // -t: allocate a pseudo-TTY
+	Mounts      []Mount
 }
 
 // Run chroots into rootfsDir and executes the given command with args.
@@ -50,7 +51,7 @@ func RunWithOptions(opts Options) error {
 
 	cmd := exec.Command(opts.Command, opts.Args...)
 
-	// Set up namespaces and chroot via SysProcAttr.
+	// Run cmd with sys proc: a process Set up namespaces and chroot via SysProcAttr.
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		Chroot:     opts.RootfsDir,
 		Cloneflags: syscall.CLONE_NEWNS | syscall.CLONE_NEWPID | syscall.CLONE_NEWUTS | syscall.CLONE_NEWIPC,
@@ -75,6 +76,13 @@ func RunWithOptions(opts Options) error {
 	if err := setupResolvConf(opts.RootfsDir); err != nil {
 		fmt.Fprintf(os.Stderr, "containy: warning: setup /run: %v\n", err)
 	}
+
+	// Apply bind mounts before starting the command.
+	appliedMounts, err := applyMounts(opts.RootfsDir, opts.Mounts)
+	if err != nil {
+		return fmt.Errorf("apply mounts: %w", err)
+	}
+	defer cleanupMounts(appliedMounts)
 
 	if opts.TTY {
 		return runWithTTY(cmd, opts)
