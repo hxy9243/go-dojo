@@ -14,6 +14,10 @@ import (
 //
 // Run with: go test -tags=integration ./internal/rootfs/
 func TestExtract_RealUbuntuTar(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("extracting an image with foreign numeric ownership requires root privileges")
+	}
+
 	tarPath := "../../ubuntu/ubuntu.tar"
 	if _, err := os.Stat(tarPath); err != nil {
 		t.Skipf("fixture %s not found: %v", tarPath, err)

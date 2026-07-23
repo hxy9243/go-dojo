@@ -4,84 +4,123 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"golang.org/x/sys/unix"
 )
 
 // Mount represents a host directory or file bind mount into the container.
 type Mount struct {
-	Source      string // Absolute path on the host
-	Destination string // Absolute path inside the container
-	ReadOnly    bool   // Mount as read-only if true
+	Source      string
+	Destination string
+	ReadOnly    bool
 }
 
-// applyMounts validates and applies bind mounts onto hostTarget locations inside rootfsDir.
-// It returns a slice of successfully mounted host target paths (in order) or an error.
-// If any mount operation fails, any mounts applied in the current call are unmounted.
+// applyMounts validates and applies bind mounts onto targets inside rootfsDir.
 func applyMounts(rootfsDir string, mounts []Mount) ([]string, error) {
 	var applied []string
+	fail := func(err error) ([]string, error) {
+		cleanupMounts(applied)
+		return nil, err
+	}
 
-	for _, m := range mounts {
-		srcInfo, err := os.Stat(m.Source)
+	for _, mount := range mounts {
+		sourceInfo, err := os.Stat(mount.Source)
 		if err != nil {
-			cleanupMounts(applied)
-			return nil, fmt.Errorf("mount source %q: %w", m.Source, err)
+			return fail(fmt.Errorf("mount source %q: %w", mount.Source, err))
 		}
 
-		cleanDest := filepath.Clean(m.Destination)
-		if !filepath.IsAbs(cleanDest) {
-			cleanupMounts(applied)
-			return nil, fmt.Errorf("mount destination %q must be an absolute path", m.Destination)
+		destination := filepath.Clean(mount.Destination)
+		if !filepath.IsAbs(destination) {
+			return fail(fmt.Errorf("mount destination %q must be an absolute path", mount.Destination))
+		}
+		if reservedRuntimeDestination(destination) {
+			return fail(fmt.Errorf("mount destination %q is reserved for a runtime filesystem", mount.Destination))
 		}
 
-		hostTarget := filepath.Join(rootfsDir, cleanDest)
-
-		if srcInfo.IsDir() {
-			if targetInfo, err := os.Stat(hostTarget); err == nil && !targetInfo.IsDir() {
-				cleanupMounts(applied)
-				return nil, fmt.Errorf("cannot mount directory %q onto file target %q", m.Source, hostTarget)
-			}
-			if err := os.MkdirAll(hostTarget, 0755); err != nil {
-				cleanupMounts(applied)
-				return nil, fmt.Errorf("mkdir target dir %q: %w", hostTarget, err)
-			}
-		} else {
-			if targetInfo, err := os.Stat(hostTarget); err == nil && targetInfo.IsDir() {
-				cleanupMounts(applied)
-				return nil, fmt.Errorf("cannot mount file %q onto directory target %q", m.Source, hostTarget)
-			}
-			if err := os.MkdirAll(filepath.Dir(hostTarget), 0755); err != nil {
-				cleanupMounts(applied)
-				return nil, fmt.Errorf("mkdir parent dir for file %q: %w", hostTarget, err)
-			}
-			if _, err := os.Stat(hostTarget); os.IsNotExist(err) {
-				f, err := os.OpenFile(hostTarget, os.O_CREATE|os.O_WRONLY, 0644)
-				if err != nil {
-					cleanupMounts(applied)
-					return nil, fmt.Errorf("create file target %q: %w", hostTarget, err)
-				}
-				_ = f.Close()
-			}
+		target, err := resolveMountTarget(rootfsDir, destination)
+		if err != nil {
+			return fail(err)
 		}
-
-		if err := unix.Mount(m.Source, hostTarget, "", unix.MS_BIND, ""); err != nil {
-			cleanupMounts(applied)
-			return nil, fmt.Errorf("bind mount %q -> %q: %w", m.Source, hostTarget, err)
+		if err := prepareMountTarget(target, mount.Source, sourceInfo.IsDir()); err != nil {
+			return fail(err)
 		}
-		applied = append(applied, hostTarget)
+		if err := unix.Mount(mount.Source, target, "", unix.MS_BIND, ""); err != nil {
+			return fail(fmt.Errorf("bind mount %q -> %q: %w", mount.Source, target, err))
+		}
+		applied = append(applied, target)
 
-		if m.ReadOnly {
-			if err := unix.Mount("", hostTarget, "", unix.MS_BIND|unix.MS_REMOUNT|unix.MS_RDONLY, ""); err != nil {
-				cleanupMounts(applied)
-				return nil, fmt.Errorf("remount ro %q: %w", hostTarget, err)
+		if mount.ReadOnly {
+			if err := unix.Mount("", target, "", unix.MS_BIND|unix.MS_REMOUNT|unix.MS_RDONLY, ""); err != nil {
+				return fail(fmt.Errorf("remount ro %q: %w", target, err))
 			}
 		}
 	}
-
 	return applied, nil
 }
 
-// cleanupMounts unmounts all applied mount targets in reverse order.
+// resolveMountTarget rejects existing symlinks between rootfsDir and the
+// destination. This prevents a path such as /data/link/config from resolving
+// outside the rootfs while the supervisor is mounting as root.
+func resolveMountTarget(rootfsDir, destination string) (string, error) {
+	current := rootfsDir
+	for _, component := range strings.Split(strings.TrimPrefix(destination, "/"), "/") {
+		current = filepath.Join(current, component)
+		info, err := os.Lstat(current)
+		switch {
+		case err == nil && info.Mode()&os.ModeSymlink != 0:
+			return "", fmt.Errorf("mount destination %q traverses symlink %q", destination, current)
+		case err == nil:
+			continue
+		case os.IsNotExist(err):
+			return filepath.Join(rootfsDir, destination), nil
+		default:
+			return "", fmt.Errorf("inspect mount destination %q: %w", current, err)
+		}
+	}
+	return filepath.Join(rootfsDir, destination), nil
+}
+
+func prepareMountTarget(target, source string, sourceIsDir bool) error {
+	targetInfo, targetErr := os.Stat(target)
+	if sourceIsDir {
+		if targetErr == nil && !targetInfo.IsDir() {
+			return fmt.Errorf("cannot mount directory %q onto file target %q", source, target)
+		}
+		if err := os.MkdirAll(target, 0o755); err != nil {
+			return fmt.Errorf("mkdir target dir %q: %w", target, err)
+		}
+		return nil
+	}
+
+	if targetErr == nil && targetInfo.IsDir() {
+		return fmt.Errorf("cannot mount file %q onto directory target %q", source, target)
+	}
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		return fmt.Errorf("mkdir parent dir for file %q: %w", target, err)
+	}
+	if os.IsNotExist(targetErr) {
+		file, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY, 0o644)
+		if err != nil {
+			return fmt.Errorf("create file target %q: %w", target, err)
+		}
+		return file.Close()
+	}
+	return targetErr
+}
+
+func reservedRuntimeDestination(destination string) bool {
+	if destination == "/" || destination == "/tmp" || destination == "/var" {
+		return true
+	}
+	for _, reserved := range []string{"/proc", "/dev", "/run"} {
+		if destination == reserved || strings.HasPrefix(destination, reserved+"/") {
+			return true
+		}
+	}
+	return false
+}
+
 func cleanupMounts(applied []string) {
 	for i := len(applied) - 1; i >= 0; i-- {
 		_ = unix.Unmount(applied[i], unix.MNT_DETACH)

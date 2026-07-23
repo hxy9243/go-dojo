@@ -1,8 +1,8 @@
 // Package main is the entry point for the containy container runtime.
 //
-// containy is an educational container runtime. This minimal instance
-// supports importing Docker images, extracting layered archives into a
-// flat rootfs, and chrooting into it to run a command in the foreground.
+// containy is an educational container runtime. It imports Docker images,
+// prepares a flat rootfs, and runs a foreground workload in Linux namespaces
+// with cgroups v2 resource limits.
 package main
 
 import (

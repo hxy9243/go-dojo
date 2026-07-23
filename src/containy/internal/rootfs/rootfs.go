@@ -1,5 +1,5 @@
 // Package rootfs extracts a docker-save tar archive into a flat rootfs
-// directory.
+// directory and prepares container-private runtime filesystems.
 //
 // A docker-save tar contains a manifest.json that lists layer tar paths in
 // order (base layer first). Each layer tar contains filesystem entries with
@@ -7,9 +7,8 @@
 // in order, and applies OCI/Docker whiteout entries (`.wh.<name>` and
 // `.wh..wh..opq`).
 //
-// The minimal instance trusts the docker image (per spec §2). Full path
-// traversal protection will be added in the complete MVP implementation
-// (spec §6.2).
+// The extractor trusts the Docker image. It is not hardened against malicious
+// archive paths or unbounded archive sizes; see spec/filesystem.md.
 package rootfs
 
 import (

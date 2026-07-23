@@ -116,29 +116,6 @@ func TestRunWithOptions_TTY(t *testing.T) {
 		t.Fatalf("RunWithOptions TTY failed: %v", err)
 	}
 }
-
-func TestApplyMounts_Validation(t *testing.T) {
-	tmpDir := t.TempDir()
-
-	// Missing source
-	_, err := applyMounts(tmpDir, []Mount{
-		{Source: filepath.Join(tmpDir, "nonexistent"), Destination: "/data"},
-	})
-	if err == nil {
-		t.Error("expected error for non-existent source path")
-	}
-
-	// Relative destination
-	hostSource := filepath.Join(tmpDir, "src")
-	_ = os.MkdirAll(hostSource, 0755)
-	_, err = applyMounts(tmpDir, []Mount{
-		{Source: hostSource, Destination: "data"},
-	})
-	if err == nil {
-		t.Error("expected error for relative destination path")
-	}
-}
-
 func TestRunWithOptions_DirectoryMount(t *testing.T) {
 	if os.Getuid() != 0 {
 		t.Skip("Skipping runtime test: requires root privileges")

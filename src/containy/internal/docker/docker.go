@@ -1,8 +1,8 @@
 // Package docker wraps the docker CLI for image import operations.
 //
-// The minimal instance uses `docker save` to produce a docker-save tar
-// archive from a local or remote image. This avoids depending on the
-// Docker daemon's internal API and keeps the implementation simple.
+// Containy uses `docker save` to produce a Docker-save tar archive from an
+// image already present in Docker's local image store. This avoids depending
+// on the Docker daemon's internal API and keeps the implementation small.
 package docker
 
 import (
