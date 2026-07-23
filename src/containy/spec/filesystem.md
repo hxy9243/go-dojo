@@ -1,152 +1,153 @@
-# Filesystem Design Spec — Containy Minimal Instance
+# Filesystem and Image Extraction
 
-This document describes the filesystem design for the minimal containy
-instance: a foreground container runtime that imports Docker images, extracts
-their layered archives into a flat rootfs, and chroots into it to run a
-command.
+This document describes the filesystem path implemented by containy: ingesting
+a Docker-save archive, flattening its layers into a rootfs, preparing runtime
+filesystems, and entering the result with `chroot`.
 
-## 1. Directory Layout
+For the complete startup sequence, see [`overview.md`](overview.md).
 
-```
-src/containy/
-├── go.mod                          # module github.com/hxy9243/go-dojo/containy
-├── go.sum
-├── main.go                         # entry point
-├── cmd/
-│   └── cmd.go                      # CLI dispatch (run, import, help)
-├── internal/
-│   ├── docker/
-│   │   └── docker.go               # docker CLI wrapper (save, inspect)
-│   ├── rootfs/
-│   │   ├── rootfs.go               # extract docker-save tar → flat rootfs
-│   │   └── rootfs_test.go          # unit tests
-│   └── runtime/
-│       └── runtime.go              # chroot + exec workload
-├── spec/
-│   ├── overview.md                 # full MVP spec
-│   └── filesystem.md              # this file
-├── docs/
-│   └── filesystem.md              # importing guide
-└── ubuntu/                         # sample OCI image + rootfs.tar
-```
+## 1. Accepted inputs
 
-## 2. Data Flow
+`containy run` accepts:
 
-```
-docker image (e.g. ubuntu:latest)
-  │
-  │  docker save → tar archive (docker-save format)
-  │  OR user provides a docker-save tar directly
-  ▼
-internal/docker.Import(imageRef) → dockerSaveTar (temp file)
-  │
-  │  internal/rootfs.Extract(dockerSaveTar, destDir)
-  │  1. read manifest.json from the docker-save tar
-  │  2. for each layer tar (in order):
-  │     a. extract into destDir
-  │     b. apply whiteouts (.wh.<name>, .wh..wh..opq)
-  │  3. result: a flat rootfs directory
-  ▼
-internal/runtime.Run(rootfsDir, command, args...)
-  │
-  │  1. chroot(rootfsDir)
-  │  2. chdir("/")
-  │  3. exec(command, args...)
-  ▼
-workload runs inside chroot with inherited stdio
+- an existing rootfs directory;
+- an uncompressed Docker-save tar containing `manifest.json`;
+- a local Docker image reference, converted to a temporary archive with
+  `docker save`.
+
+It does not currently accept a raw flat-rootfs tar, gzip-compressed archive,
+OCI image-layout directory, or registry reference that is not already present
+in Docker.
+
+## 2. Docker-save format
+
+A Docker-save archive contains metadata and one tar per filesystem layer:
+
+```text
+image.tar
+├── manifest.json
+├── <config>.json
+└── <layer paths>
+    └── layer.tar
 ```
 
-## 3. Docker Save Archive Format
+`manifest.json[0].Layers` provides the layer paths in base-to-top order.
+Containy's extractor reads the archive, looks up those layers, and applies
+them sequentially to one destination directory.
 
-A `docker save <image>` tar contains:
+## 3. Extraction algorithm
 
-```
-<image>.tar/
-├── manifest.json          # array: [{ Config, RepoTags, Layers }]
-├── <config-sha256>.json   # image config (history, rootfs diff_ids)
-├── <repo>:<tag>/           # legacy tag directory
-└── <layer-sha256>/         # one directory per layer
-    └── layer.tar           # the actual layer tar
-```
+```text
+Extract(dockerSaveTar, destination):
+    create destination and normalize its mode to 0755
+    read outer tar
+    parse manifest.json
+    retain regular-file entries needed for layer lookup
 
-`manifest.json[0].Layers` is an ordered array of layer tar paths
-(e.g. `["abc.../layer.tar", "def.../layer.tar"]`).
+    for layer in manifest[0].Layers:
+        for entry in layer tar:
+            .wh.<name>    -> remove the named lower entry
+            .wh..wh..opq -> remove existing children of the directory
+            directory    -> create and restore metadata
+            regular file -> create content and restore metadata
+            symlink      -> create link and restore link ownership
+            hard link    -> create link and restore metadata
 
-Each `layer.tar` is a standard tar with paths relative to `/` (e.g.
-`bin/`, `etc/passwd`). Whiteout files are named `.wh.<name>` (delete
-specific entry) or `.wh..wh..opq` (delete entire parent directory
-contents).
-
-## 4. Rootfs Extraction Algorithm
-
-```
-Extract(dockerSaveTar, destDir):
-    open dockerSaveTar
-    read manifest.json → layerPaths[]
-    for each layerPath in layerPaths (base first):
-        open layer.tar from dockerSaveTar
-        for each entry in layer.tar:
-            if entry.name matches .wh..wh..opq:
-                remove all entries in entry.dir from destDir
-                continue
-            if entry.name matches .wh.<name>:
-                remove destDir/entry.dir/<name>
-                continue
-            extract entry into destDir (preserving mode, symlinks)
-    return destDir
+    return flattened destination
 ```
 
-Security: the minimal instance trusts the docker image (per spec §2, the
-runtime is for trusted images only). Path traversal protection will be
-added in the full MVP implementation (spec §6.2).
+The extractor restores numeric UID/GID values from tar headers. Those IDs are
+filesystem semantics: services such as APT may deliberately change to an image
+user and depend on the archive's original ownership. File modes are applied
+after ownership because `chown` can clear set-ID bits.
 
-## 5. Chroot Execution
+The destination root is normalized to mode `0755` because temporary
+directories created by `os.MkdirTemp` begin as `0700`; leaving that mode in
+place would prevent non-root image users from traversing `/`.
 
+## 4. Trust and limitations
+
+The extractor is suitable only for trusted archives. It currently:
+
+- buffers outer regular-file entries, including layer tars, in memory;
+- has no entry-count or extracted-byte limits;
+- does not completely prevent `..` or symlink traversal from a malicious
+  layer;
+- accepts a narrower set of tar behavior than a production OCI unpacker;
+- removes whiteout targets using best-effort deletion.
+
+Because containy runs as root, processing an untrusted archive could modify
+host paths. A hardened extractor would use descriptor-relative traversal
+(`openat2` or carefully constrained `openat`), reject absolute and escaping
+paths, bound resource use, and roll back partial extraction.
+
+## 5. Host-side preparation
+
+Before creating the namespace init, the supervisor:
+
+1. normalizes rootfs `/etc/resolv.conf` to a regular file and overwrites it
+   with the host resolver configuration, falling back to public resolvers;
+2. applies requested user bind mounts beneath the rootfs;
+3. later unmounts those binds after the namespace process exits.
+
+For an existing rootfs directory, these operations can modify the supplied
+tree. A rootfs extracted into a temporary directory is deleted after the run.
+
+Bind-mount details are in [`bind-mount.md`](bind-mount.md).
+
+## 6. Namespace runtime filesystems
+
+After the mount namespace is created, `SetupRuntimeFilesystems` makes mount
+propagation private and mounts `/proc`, `/dev`, `/dev/shm`, and `/run` beneath
+the rootfs. It also prepares `/tmp` and `/var/run`.
+
+All runtime directory components are checked with `Lstat` so an existing
+rootfs symlink cannot redirect a privileged mount outside the tree.
+
+See [`runtime-dir.md`](runtime-dir.md) for exact filesystems, flags, devices,
+and modes.
+
+## 7. Entering the rootfs
+
+The private init process performs:
+
+```text
+chroot(rootfsDir)
+chdir("/")
+exec(workload)
 ```
-Run(rootfsDir, command, args):
-    fork()
-    in child:
-        chroot(rootfsDir)
-        chdir("/")
-        exec(command, args...)  # inherits stdio
-    in parent:
-        wait(child)
-        return exitCode
+
+Containy does not currently use `pivot_root`. Since it retains root
+credentials and applies no capability restrictions, `chroot` is a filesystem
+view change—not a complete security boundary.
+
+The workload environment is:
+
+```text
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+HOME=/root
+USER=root
+LOGNAME=root
+TERM=<host TERM or xterm-256color>
 ```
 
-The minimal instance uses `chroot(2)` directly — no namespaces, no
-pivot_root, no cgroups. This is the simplest isolation that lets us
-verify the rootfs extraction and command execution pipeline. The full
-MVP will replace this with `pivot_root` + namespaces (spec §6.3, §6.4).
+Bare command names are resolved against that `PATH` after entering the
+rootfs.
 
-## 6. CLI Interface
+## 8. Relevant code and tests
 
+```text
+internal/rootfs/rootfs.go              Docker-save layer extraction
+internal/rootfs/rootfs_test.go         extractor unit tests
+internal/rootfs/rootfs_integration_test.go
+internal/rootfs/runtimefs.go           private runtime mounts
+internal/rootfs/runtimefs_test.go
+internal/runtime/runtime.go            resolver setup, chroot, and exec
 ```
-containy run <docker-image|docker-save-tar|rootfs-dir> <command> [args...]
-containy import <docker-image> <output-tar>
-containy help
+
+Run:
+
+```bash
+go test ./internal/rootfs ./internal/runtime
+sudo go test -tags=integration ./internal/rootfs
 ```
-
-### run
-
-- If the first argument is a directory, use it directly as rootfs.
-- If it's a tar file, extract it (docker-save format) to a temp dir.
-- If it's an image name (no `/` and no `.tar`), call `docker save` first.
-- Then chroot into the rootfs and exec the command.
-- Runs in the foreground; stdio is inherited.
-- Requires root (for chroot).
-
-### import
-
-- Calls `docker save <image> -o <output-tar>`.
-- Wraps the docker CLI; requires docker daemon running.
-
-## 7. Limitations of the Minimal Instance
-
-- No PID/mount/UTS/IPC namespaces (uses chroot only).
-- No cgroups.
-- No signal forwarding.
-- No cleanup stack (temp dirs are best-effort cleaned).
-- No path traversal protection (trusted images only).
-- No gzip support for docker-save tars (docker save produces uncompressed).
-- Host network namespace is shared (same as full MVP).
