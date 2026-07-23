@@ -99,6 +99,7 @@ func TestRelaySignalsForwardsToWorkloadProcessGroup(t *testing.T) {
 func TestBootstrapFileRoundTrip(t *testing.T) {
 	want := initConfig{
 		RootfsDir: "/tmp/rootfs",
+		Hostname:  "containy-test",
 		Command:   "/bin/sh",
 		Args:      []string{"-c", "exit 0"},
 	}
@@ -112,7 +113,7 @@ func TestBootstrapFileRoundTrip(t *testing.T) {
 	if err := json.NewDecoder(file).Decode(&got); err != nil {
 		t.Fatal(err)
 	}
-	if got.RootfsDir != want.RootfsDir || got.Command != want.Command ||
+	if got.RootfsDir != want.RootfsDir || got.Hostname != want.Hostname || got.Command != want.Command ||
 		strings.Join(got.Args, "\x00") != strings.Join(want.Args, "\x00") {
 		t.Fatalf("bootstrap = %+v, want %+v", got, want)
 	}
@@ -121,6 +122,7 @@ func TestBootstrapFileRoundTrip(t *testing.T) {
 func TestReadInitConfig(t *testing.T) {
 	data, err := json.Marshal(initConfig{
 		RootfsDir: "/tmp/rootfs",
+		Hostname:  "containy-test",
 		Command:   "/bin/sh",
 		Args:      []string{"-c", "true"},
 	})
@@ -132,7 +134,7 @@ func TestReadInitConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if config.RootfsDir != "/tmp/rootfs" || config.Command != "/bin/sh" || len(config.Args) != 2 {
+	if config.RootfsDir != "/tmp/rootfs" || config.Hostname != "containy-test" || config.Command != "/bin/sh" || len(config.Args) != 2 {
 		t.Fatalf("config = %+v", config)
 	}
 	if err := unix.Close(fd); err != unix.EBADF {

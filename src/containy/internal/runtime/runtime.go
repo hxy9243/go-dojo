@@ -70,6 +70,7 @@ type Options struct {
 // those implementation details are not exposed to the container workload.
 type initConfig struct {
 	RootfsDir string   `json:"rootfs"`
+	Hostname  string   `json:"hostname"`
 	Command   string   `json:"command"`
 	Args      []string `json:"args"`
 }
@@ -107,6 +108,10 @@ func RunWithOptions(opts Options) error {
 		return err
 	}
 	opts.RootfsDir = rootfsDir
+	containerID, err := newContainerID()
+	if err != nil {
+		return err
+	}
 
 	cleanupHostMounts, err := prepareHostFilesystem(opts)
 	if err != nil {
@@ -114,12 +119,12 @@ func RunWithOptions(opts Options) error {
 	}
 	defer cleanupHostMounts()
 
-	group, err := createContainerCgroup(opts.Limits)
+	group, err := createContainerCgroup(containerID, opts.Limits)
 	if err != nil {
 		return err
 	}
 
-	cmd, bootstrap, err := createInitCommand(opts, group.FD())
+	cmd, bootstrap, err := createInitCommand(opts, containerID, group.FD())
 	if err != nil {
 		_ = group.Cleanup()
 		return err
@@ -170,11 +175,7 @@ func prepareHostFilesystem(opts Options) (func(), error) {
 	return func() { cleanupMounts(applied) }, nil
 }
 
-func createContainerCgroup(limits cgroup.Limits) (*cgroup.Group, error) {
-	containerID, err := newContainerID()
-	if err != nil {
-		return nil, err
-	}
+func createContainerCgroup(containerID string, limits cgroup.Limits) (*cgroup.Group, error) {
 	group, err := cgroup.Create(containerID, limits)
 	if err != nil {
 		return nil, fmt.Errorf("create cgroup: %w", err)
@@ -198,9 +199,10 @@ func createContainerCgroup(limits cgroup.Limits) (*cgroup.Group, error) {
 // runContainerInit(bootstrapFD), which reads and closes this file descriptor.
 // The descriptor number is local to the child; the underlying file may have
 // had a different descriptor number in the supervisor.
-func createInitCommand(opts Options, cgroupFD int) (*exec.Cmd, *os.File, error) {
+func createInitCommand(opts Options, containerID string, cgroupFD int) (*exec.Cmd, *os.File, error) {
 	bootstrap, err := createBootstrapFile(initConfig{
 		RootfsDir: opts.RootfsDir,
+		Hostname:  containerID,
 		Command:   opts.Command,
 		Args:      opts.Args,
 	})
@@ -254,6 +256,9 @@ func runContainerInit(fd int) error {
 	if err != nil {
 		return err
 	}
+	if err := unix.Sethostname([]byte(config.Hostname)); err != nil {
+		return fmt.Errorf("set hostname: %w", err)
+	}
 
 	cleanup, err := rootfs.SetupRuntimeFilesystems(config.RootfsDir)
 	if err != nil {
@@ -267,6 +272,11 @@ func runContainerInit(fd int) error {
 	environment := workloadEnvironment()
 	if err := installEnvironment(environment); err != nil {
 		return err
+	}
+
+	const HostnameFile = "/etc/hostname"
+	if err := os.WriteFile(HostnameFile, []byte(config.Hostname+"\n"), 0o644); err != nil {
+		return fmt.Errorf("write %s: %w", HostnameFile, err)
 	}
 
 	command, err := resolveCommand(config.Command)
@@ -306,7 +316,7 @@ func readInitConfig(fd int) (initConfig, error) {
 	if err := json.Unmarshal(data, &config); err != nil {
 		return initConfig{}, fmt.Errorf("decode bootstrap: %w", err)
 	}
-	if !filepath.IsAbs(config.RootfsDir) || config.Command == "" {
+	if !filepath.IsAbs(config.RootfsDir) || config.Hostname == "" || config.Command == "" {
 		return initConfig{}, errors.New("invalid bootstrap configuration")
 	}
 	return config, nil
@@ -348,7 +358,7 @@ func resolveCommand(command string) (string, error) {
 }
 
 func newContainerID() (string, error) {
-	var raw [12]byte
+	var raw [4]byte
 	if _, err := rand.Read(raw[:]); err != nil {
 		return "", fmt.Errorf("generate container ID: %w", err)
 	}
