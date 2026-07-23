@@ -46,13 +46,17 @@ func makeDockerSaveTar(t *testing.T, layers map[string][]byte, manifest dockerMa
 
 // makeLayerTar creates a layer tar in memory from a list of entries.
 type layerEntry struct {
-	Name     string
-	Content  string
-	Type     byte
-	Mode     int64
-	UID      int
-	GID      int
-	Linkname string
+	Name      string
+	Content   string
+	Type      byte
+	Mode      int64
+	Ownership *layerOwnership
+	Linkname  string
+}
+
+type layerOwnership struct {
+	UID int
+	GID int
 }
 
 func makeLayerTar(t *testing.T, entries []layerEntry) []byte {
@@ -69,13 +73,19 @@ func makeLayerTar(t *testing.T, entries []layerEntry) []byte {
 		if mode == 0 {
 			mode = 0o644
 		}
+		uid := os.Geteuid()
+		gid := os.Getegid()
+		if e.Ownership != nil {
+			uid = e.Ownership.UID
+			gid = e.Ownership.GID
+		}
 		hdr := &tar.Header{
 			Name:     e.Name,
 			Mode:     mode,
 			Size:     int64(len(e.Content)),
 			Typeflag: typ,
-			Uid:      e.UID,
-			Gid:      e.GID,
+			Uid:      uid,
+			Gid:      gid,
 			Linkname: e.Linkname,
 		}
 		if err := tw.WriteHeader(hdr); err != nil {
@@ -153,15 +163,59 @@ func TestExtract_SingleLayer(t *testing.T) {
 	}
 }
 
+func TestExtract_NormalizesRootDirectoryPermissions(t *testing.T) {
+	layerData := makeLayerTar(t, []layerEntry{
+		{Name: "etc/", Type: tar.TypeDir, Mode: 0o755},
+	})
+	manifest := dockerManifest{{Layers: []string{"layer/layer.tar"}}}
+	tarData := makeDockerSaveTar(t, map[string][]byte{"layer/layer.tar": layerData}, manifest)
+
+	tmpFile, err := os.CreateTemp("", "containy-test-*.tar")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(tmpFile.Name())
+	if _, err := tmpFile.Write(tarData); err != nil {
+		t.Fatal(err)
+	}
+	if err := tmpFile.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// os.MkdirTemp and testing.T.TempDir create mode-0700 directories. That
+	// directory becomes / after chroot, so non-root container users must be
+	// able to traverse it.
+	destDir := t.TempDir()
+	if err := os.Chmod(destDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := Extract(tmpFile.Name(), destDir); err != nil {
+		t.Fatalf("Extract failed: %v", err)
+	}
+
+	info, err := os.Stat(destDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o755 {
+		t.Fatalf("rootfs directory mode = %04o, want 0755", got)
+	}
+}
+
 func TestExtract_PreservesNumericOwnership(t *testing.T) {
 	if os.Geteuid() != 0 {
-		t.Skip("ownership restoration requires root privileges")
+		t.Skip("preserving foreign numeric ownership requires root privileges")
 	}
 
 	const aptUID = 42
 	const aptGID = 65534
 	layerData := makeLayerTar(t, []layerEntry{
-		{Name: "var/lib/apt/lists/partial/", Type: tar.TypeDir, Mode: 0o700, UID: aptUID, GID: aptGID},
+		{
+			Name:      "var/lib/apt/lists/partial/",
+			Type:      tar.TypeDir,
+			Mode:      0o700,
+			Ownership: &layerOwnership{UID: aptUID, GID: aptGID},
+		},
 	})
 	manifest := dockerManifest{{Layers: []string{"layer/layer.tar"}}}
 	tarData := makeDockerSaveTar(t, map[string][]byte{"layer/layer.tar": layerData}, manifest)
@@ -404,6 +458,41 @@ func TestExtract_Symlink(t *testing.T) {
 	}
 }
 
+func TestExtract_HardLink(t *testing.T) {
+	layerData := makeLayerTar(t, []layerEntry{
+		{Name: "bin/", Type: tar.TypeDir, Mode: 0o755},
+		{Name: "bin/app", Content: "hello\n", Mode: 0o755},
+		{Name: "bin/app-link", Type: tar.TypeLink, Linkname: "bin/app", Mode: 0o755},
+	})
+	manifest := dockerManifest{{Layers: []string{"l/layer.tar"}}}
+	tarData := makeDockerSaveTar(t, map[string][]byte{"l/layer.tar": layerData}, manifest)
+
+	tarPath := filepath.Join(t.TempDir(), "image.tar")
+	if err := os.WriteFile(tarPath, tarData, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	destDir := t.TempDir()
+	if err := Extract(tarPath, destDir); err != nil {
+		t.Fatalf("Extract failed: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(destDir, "bin", "app-link"))
+	if err != nil {
+		t.Fatalf("read hard link: %v", err)
+	}
+	if string(data) != "hello\n" {
+		t.Errorf("hard link content = %q, want %q", string(data), "hello\n")
+	}
+	info, err := os.Stat(filepath.Join(destDir, "bin", "app-link"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o755 {
+		t.Errorf("hard link mode = %04o, want 0755", got)
+	}
+}
+
 func TestExtract_NoManifest(t *testing.T) {
 	// Create a tar with no manifest.json.
 	var buf bytes.Buffer
@@ -425,6 +514,36 @@ func TestExtract_NoManifest(t *testing.T) {
 	err := Extract(tmpFile.Name(), destDir)
 	if err == nil {
 		t.Fatal("Extract should fail with no manifest")
+	}
+}
+
+func TestExtract_MalformedManifest(t *testing.T) {
+	manifestJSON := []byte("{not-json")
+
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	if err := tw.WriteHeader(&tar.Header{
+		Name: "manifest.json",
+		Mode: 0o644,
+		Size: int64(len(manifestJSON)),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tw.Write(manifestJSON); err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	tarPath := filepath.Join(t.TempDir(), "image.tar")
+	if err := os.WriteFile(tarPath, buf.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	err := Extract(tarPath, t.TempDir())
+	if err == nil {
+		t.Fatal("Extract should fail with a malformed manifest")
 	}
 }
 
