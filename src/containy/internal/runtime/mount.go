@@ -113,7 +113,7 @@ func reservedRuntimeDestination(destination string) bool {
 	if destination == "/" || destination == "/tmp" || destination == "/var" {
 		return true
 	}
-	for _, reserved := range []string{"/proc", "/dev", "/run"} {
+	for _, reserved := range []string{"/proc", "/dev", "/run", "/sys/fs/cgroup"} {
 		if destination == reserved || strings.HasPrefix(destination, reserved+"/") {
 			return true
 		}

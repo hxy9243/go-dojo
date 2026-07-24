@@ -140,6 +140,13 @@ func (g *Group) FD() int {
 	return int(g.fd.Fd())
 }
 
+// Path returns the host path of this cgroup leaf. It is used while the
+// container init still has access to the host mount namespace to bind the
+// leaf into the container's private mount namespace.
+func (g *Group) Path() string {
+	return g.path
+}
+
 // OOMKilled reports whether the cgroup observed an OOM kill after creation.
 func (g *Group) OOMKilled() (bool, error) {
 	current, err := readEvent(filepath.Join(g.path, "memory.events"), "oom_kill")

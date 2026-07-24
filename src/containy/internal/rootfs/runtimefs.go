@@ -36,7 +36,7 @@ type filesystemMount struct {
 // SetupRuntimeFilesystems creates and mounts the virtual filesystems needed by
 // a minimal container. It must be called from the container's private mount
 // namespace after the PID namespace has been created.
-func SetupRuntimeFilesystems(rootfsDir string) (func() error, error) {
+func SetupRuntimeFilesystems(rootfsDir string, cgroupPath string) (func() error, error) {
 	rootfsDir, err := resolveRootfs(rootfsDir)
 	if err != nil {
 		return nil, err
@@ -56,11 +56,24 @@ func SetupRuntimeFilesystems(rootfsDir string) (func() error, error) {
 	if err := setupRun(rootfsDir, mounts); err != nil {
 		return cleanupSetupFailure(mounts, err)
 	}
+	if err := setupCgroup(rootfsDir, cgroupPath, mounts); err != nil {
+		return cleanupSetupFailure(mounts, err)
+	}
 	if err := setupRuntimeDirectories(rootfsDir); err != nil {
 		return cleanupSetupFailure(mounts, err)
 	}
 
 	return mounts.cleanup, nil
+}
+
+// setupCgroup exposes only the container's cgroup leaf. The bind is read-only
+// so the workload can inspect its limits and usage but cannot alter cgroup
+// controls, create descendants, or move processes.
+func setupCgroup(rootfsDir, cgroupPath string, mounts *runtimeMounts) error {
+	if cgroupPath == "" {
+		return nil
+	}
+	return mounts.bindMountReadOnly(rootfsDir, "/sys/fs/cgroup", cgroupPath, 0o755)
 }
 
 func cleanupSetupFailure(mounts *runtimeMounts, setupErr error) (func() error, error) {
@@ -154,6 +167,25 @@ func (m *runtimeMounts) mount(rootfsDir string, spec filesystemMount) (string, e
 	}
 	m.paths = append(m.paths, target)
 	return target, nil
+}
+
+func (m *runtimeMounts) bindMountReadOnly(rootfsDir, containerPath, source string, mode os.FileMode) error {
+	target, err := ensureDirectory(rootfsDir, containerPath, mode)
+	if err != nil {
+		return fmt.Errorf("prepare %s: %w", containerPath, err)
+	}
+	if err := unix.Mount(source, target, "", unix.MS_BIND, ""); err != nil {
+		return fmt.Errorf("bind mount %s: %w", containerPath, err)
+	}
+	m.paths = append(m.paths, target)
+	// MS_BIND creates the mount but inherits the source's access flags. Remount
+	// this bind specifically so it becomes read-only without remounting the
+	// host cgroup filesystem itself.
+	flags := uintptr(unix.MS_BIND | unix.MS_REMOUNT | unix.MS_RDONLY | unix.MS_NOSUID | unix.MS_NODEV | unix.MS_NOEXEC)
+	if err := unix.Mount("", target, "", flags, ""); err != nil {
+		return fmt.Errorf("remount %s read-only: %w", containerPath, err)
+	}
+	return nil
 }
 
 func (m *runtimeMounts) cleanup() error {

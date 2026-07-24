@@ -78,9 +78,10 @@ func TestSetupRuntimeFilesystemsInPrivateNamespace(t *testing.T) {
 	command.Env = append(os.Environ(),
 		"_CONTAINY_RUNTIMEFS_TEST=1",
 		"_CONTAINY_RUNTIMEFS_ROOT="+rootfsDir,
+		"_CONTAINY_RUNTIMEFS_CGROUP=/sys/fs/cgroup",
 	)
 	command.SysProcAttr = &syscall.SysProcAttr{
-		Cloneflags: syscall.CLONE_NEWNS | syscall.CLONE_NEWPID,
+		Cloneflags: syscall.CLONE_NEWNS | syscall.CLONE_NEWPID | syscall.CLONE_NEWCGROUP,
 	}
 	output, err := command.CombinedOutput()
 	if err != nil {
@@ -104,7 +105,7 @@ func TestRuntimeFilesystemHelper(t *testing.T) {
 		t.Skip("helper process only")
 	}
 	rootfsDir := os.Getenv("_CONTAINY_RUNTIMEFS_ROOT")
-	cleanup, err := SetupRuntimeFilesystems(rootfsDir)
+	cleanup, err := SetupRuntimeFilesystems(rootfsDir, os.Getenv("_CONTAINY_RUNTIMEFS_CGROUP"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,6 +115,17 @@ func TestRuntimeFilesystemHelper(t *testing.T) {
 	assertFilesystemType(t, filepath.Join(rootfsDir, "dev"), unix.TMPFS_MAGIC)
 	assertFilesystemType(t, filepath.Join(rootfsDir, "dev/shm"), unix.TMPFS_MAGIC)
 	assertFilesystemType(t, filepath.Join(rootfsDir, "run"), unix.TMPFS_MAGIC)
+	assertFilesystemType(t, filepath.Join(rootfsDir, "sys/fs/cgroup"), unix.CGROUP2_SUPER_MAGIC)
+	if err := os.WriteFile(filepath.Join(rootfsDir, "sys/fs/cgroup/cgroup.procs"), []byte("0\n"), 0o644); !errors.Is(err, syscall.EROFS) {
+		t.Fatalf("write cgroup.procs error = %v, want EROFS", err)
+	}
+	cgroupMembership, err := os.ReadFile(filepath.Join(rootfsDir, "proc/self/cgroup"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.TrimSpace(string(cgroupMembership)); got != "0::/" {
+		t.Fatalf("/proc/self/cgroup = %q, want container-relative cgroup root", got)
+	}
 
 	if info, err := os.Stat(filepath.Join(rootfsDir, "run/lock")); err != nil {
 		t.Fatal(err)

@@ -69,10 +69,11 @@ type Options struct {
 // descriptor instead of command-line arguments or environment variables so
 // those implementation details are not exposed to the container workload.
 type initConfig struct {
-	RootfsDir string   `json:"rootfs"`
-	Hostname  string   `json:"hostname"`
-	Command   string   `json:"command"`
-	Args      []string `json:"args"`
+	RootfsDir  string   `json:"rootfs"`
+	CgroupPath string   `json:"cgroup"`
+	Hostname   string   `json:"hostname"`
+	Command    string   `json:"command"`
+	Args       []string `json:"args"`
 }
 
 func init() {
@@ -124,7 +125,7 @@ func RunWithOptions(opts Options) error {
 		return err
 	}
 
-	cmd, bootstrap, err := createInitCommand(opts, containerID, group.FD())
+	cmd, bootstrap, err := createInitCommand(opts, containerID, group.FD(), group.Path())
 	if err != nil {
 		_ = group.Cleanup()
 		return err
@@ -199,12 +200,13 @@ func createContainerCgroup(containerID string, limits cgroup.Limits) (*cgroup.Gr
 // runContainerInit(bootstrapFD), which reads and closes this file descriptor.
 // The descriptor number is local to the child; the underlying file may have
 // had a different descriptor number in the supervisor.
-func createInitCommand(opts Options, containerID string, cgroupFD int) (*exec.Cmd, *os.File, error) {
+func createInitCommand(opts Options, containerID string, cgroupFD int, cgroupPath string) (*exec.Cmd, *os.File, error) {
 	bootstrap, err := createBootstrapFile(initConfig{
-		RootfsDir: opts.RootfsDir,
-		Hostname:  containerID,
-		Command:   opts.Command,
-		Args:      opts.Args,
+		RootfsDir:  opts.RootfsDir,
+		CgroupPath: cgroupPath,
+		Hostname:   containerID,
+		Command:    opts.Command,
+		Args:       opts.Args,
 	})
 	if err != nil {
 		return nil, nil, err
@@ -216,7 +218,7 @@ func createInitCommand(opts Options, containerID string, cgroupFD int) (*exec.Cm
 	cmd.ExtraFiles = []*os.File{bootstrap}
 	cmd.Env = append(os.Environ(), initMarkerEnv)
 	cmd.SysProcAttr = &syscall.SysProcAttr{
-		Cloneflags:  syscall.CLONE_NEWNS | syscall.CLONE_NEWPID | syscall.CLONE_NEWUTS | syscall.CLONE_NEWIPC,
+		Cloneflags:  syscall.CLONE_NEWNS | syscall.CLONE_NEWPID | syscall.CLONE_NEWUTS | syscall.CLONE_NEWIPC | syscall.CLONE_NEWCGROUP,
 		Pdeathsig:   syscall.SIGKILL,
 		UseCgroupFD: true,
 		CgroupFD:    cgroupFD,
@@ -260,7 +262,7 @@ func runContainerInit(fd int) error {
 		return fmt.Errorf("set hostname: %w", err)
 	}
 
-	cleanup, err := rootfs.SetupRuntimeFilesystems(config.RootfsDir)
+	cleanup, err := rootfs.SetupRuntimeFilesystems(config.RootfsDir, config.CgroupPath)
 	if err != nil {
 		return err
 	}
@@ -316,7 +318,7 @@ func readInitConfig(fd int) (initConfig, error) {
 	if err := json.Unmarshal(data, &config); err != nil {
 		return initConfig{}, fmt.Errorf("decode bootstrap: %w", err)
 	}
-	if !filepath.IsAbs(config.RootfsDir) || config.Hostname == "" || config.Command == "" {
+	if !filepath.IsAbs(config.RootfsDir) || !filepath.IsAbs(config.CgroupPath) || config.Hostname == "" || config.Command == "" {
 		return initConfig{}, errors.New("invalid bootstrap configuration")
 	}
 	return config, nil
@@ -358,7 +360,7 @@ func resolveCommand(command string) (string, error) {
 }
 
 func newContainerID() (string, error) {
-	var raw [4]byte
+	var raw [6]byte
 	if _, err := rand.Read(raw[:]); err != nil {
 		return "", fmt.Errorf("generate container ID: %w", err)
 	}

@@ -17,20 +17,22 @@ import (
 
 func TestReservedRuntimeDestination(t *testing.T) {
 	tests := map[string]bool{
-		"/":           true,
-		"/proc":       true,
-		"/proc/self":  true,
-		"/dev/null":   true,
-		"/run/lock":   true,
-		"/tmp":        true,
-		"/var":        true,
-		"/tmp/cache":  false,
-		"/var/lib":    false,
-		"/procedure":  false,
-		"/device":     false,
-		"/runtime":    false,
-		"/sys":        false,
-		"/mnt/volume": false,
+		"/":                      true,
+		"/proc":                  true,
+		"/proc/self":             true,
+		"/dev/null":              true,
+		"/run/lock":              true,
+		"/sys/fs/cgroup":         true,
+		"/sys/fs/cgroup/cpu.max": true,
+		"/tmp":                   true,
+		"/var":                   true,
+		"/tmp/cache":             false,
+		"/var/lib":               false,
+		"/procedure":             false,
+		"/device":                false,
+		"/runtime":               false,
+		"/sys":                   false,
+		"/mnt/volume":            false,
 	}
 	for destination, want := range tests {
 		if got := reservedRuntimeDestination(destination); got != want {
@@ -41,7 +43,7 @@ func TestReservedRuntimeDestination(t *testing.T) {
 
 func TestApplyMountsRejectsReservedDestinationBeforeMount(t *testing.T) {
 	source := t.TempDir()
-	for _, destination := range []string{"/", "/proc", "/dev/shm", "/run/lock", "/tmp", "/var"} {
+	for _, destination := range []string{"/", "/proc", "/dev/shm", "/run/lock", "/sys/fs/cgroup", "/tmp", "/var"} {
 		_, err := applyMounts(t.TempDir(), []Mount{{Source: source, Destination: destination}})
 		if err == nil || !strings.Contains(err.Error(), "reserved") {
 			t.Errorf("destination %q error = %v, want reserved-path error", destination, err)
@@ -98,10 +100,11 @@ func TestRelaySignalsForwardsToWorkloadProcessGroup(t *testing.T) {
 
 func TestBootstrapFileRoundTrip(t *testing.T) {
 	want := initConfig{
-		RootfsDir: "/tmp/rootfs",
-		Hostname:  "containy-test",
-		Command:   "/bin/sh",
-		Args:      []string{"-c", "exit 0"},
+		RootfsDir:  "/tmp/rootfs",
+		CgroupPath: "/sys/fs/cgroup/containy/test",
+		Hostname:   "containy-test",
+		Command:    "/bin/sh",
+		Args:       []string{"-c", "exit 0"},
 	}
 	file, err := createBootstrapFile(want)
 	if err != nil {
@@ -113,18 +116,39 @@ func TestBootstrapFileRoundTrip(t *testing.T) {
 	if err := json.NewDecoder(file).Decode(&got); err != nil {
 		t.Fatal(err)
 	}
-	if got.RootfsDir != want.RootfsDir || got.Hostname != want.Hostname || got.Command != want.Command ||
+	if got.RootfsDir != want.RootfsDir || got.CgroupPath != want.CgroupPath || got.Hostname != want.Hostname || got.Command != want.Command ||
 		strings.Join(got.Args, "\x00") != strings.Join(want.Args, "\x00") {
 		t.Fatalf("bootstrap = %+v, want %+v", got, want)
 	}
 }
 
+func TestCreateInitCommandIncludesCgroupNamespaceAndPath(t *testing.T) {
+	opts := Options{RootfsDir: "/tmp/rootfs", Command: "/bin/sh"}
+	cmd, bootstrap, err := createInitCommand(opts, "containy-test", 0, "/sys/fs/cgroup/containy/test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer bootstrap.Close()
+
+	if cmd.SysProcAttr.Cloneflags&syscall.CLONE_NEWCGROUP == 0 {
+		t.Fatal("private init does not create a cgroup namespace")
+	}
+	var config initConfig
+	if err := json.NewDecoder(bootstrap).Decode(&config); err != nil {
+		t.Fatal(err)
+	}
+	if config.CgroupPath != "/sys/fs/cgroup/containy/test" {
+		t.Fatalf("cgroup path = %q", config.CgroupPath)
+	}
+}
+
 func TestReadInitConfig(t *testing.T) {
 	data, err := json.Marshal(initConfig{
-		RootfsDir: "/tmp/rootfs",
-		Hostname:  "containy-test",
-		Command:   "/bin/sh",
-		Args:      []string{"-c", "true"},
+		RootfsDir:  "/tmp/rootfs",
+		CgroupPath: "/sys/fs/cgroup/containy/test",
+		Hostname:   "containy-test",
+		Command:    "/bin/sh",
+		Args:       []string{"-c", "true"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -134,7 +158,7 @@ func TestReadInitConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if config.RootfsDir != "/tmp/rootfs" || config.Hostname != "containy-test" || config.Command != "/bin/sh" || len(config.Args) != 2 {
+	if config.RootfsDir != "/tmp/rootfs" || config.CgroupPath != "/sys/fs/cgroup/containy/test" || config.Hostname != "containy-test" || config.Command != "/bin/sh" || len(config.Args) != 2 {
 		t.Fatalf("config = %+v", config)
 	}
 	if err := unix.Close(fd); err != unix.EBADF {
