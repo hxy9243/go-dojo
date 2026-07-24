@@ -314,7 +314,7 @@ func prepareRootfsWithSave(source string, saveImage func(string, string) error) 
 	info, err := os.Stat(source)
 	if err != nil {
 		if os.IsNotExist(err) && !looksLikeRootfsPath(source) {
-			return importImageToTemp(source, saveImage)
+			return importImageToLocal(source, saveImage)
 		}
 		return "", nil, fmt.Errorf("stat %s: %w", source, err)
 	}
@@ -344,10 +344,18 @@ func looksLikeRootfsPath(source string) bool {
 		strings.HasSuffix(lower, ".tgz")
 }
 
-func importImageToTemp(image string, saveImage func(string, string) error) (string, func(), error) {
-	archive, err := os.CreateTemp("", "containy-import-*.tar")
+// importImageToLocal stages the Docker-save archive beside the caller instead
+// of in the system temporary directory. A Docker-save archive can be as large
+// as the image itself, so keeping it out of /tmp avoids competing with the
+// extracted rootfs for temporary filesystem capacity.
+func importImageToLocal(image string, saveImage func(string, string) error) (string, func(), error) {
+	workingDir, err := os.Getwd()
 	if err != nil {
-		return "", nil, fmt.Errorf("create temporary image archive: %w", err)
+		return "", nil, fmt.Errorf("resolve local image directory: %w", err)
+	}
+	archive, err := os.CreateTemp(workingDir, "containy-import-*.tar")
+	if err != nil {
+		return "", nil, fmt.Errorf("create local image archive: %w", err)
 	}
 	archivePath := archive.Name()
 	if err := archive.Close(); err != nil {
@@ -364,14 +372,7 @@ func importImageToTemp(image string, saveImage func(string, string) error) (stri
 			wrapRemoveError(archivePath, removeErr),
 		)
 	}
-	rootfsDir, cleanup, err := extractToTemp(archivePath)
-	if removeErr := os.Remove(archivePath); removeErr != nil {
-		if cleanup != nil {
-			cleanup()
-		}
-		return "", nil, errors.Join(err, fmt.Errorf("remove temporary image archive %q: %w", archivePath, removeErr))
-	}
-	return rootfsDir, cleanup, err
+	return extractToTemp(archivePath)
 }
 
 func wrapRemoveError(path string, err error) error {

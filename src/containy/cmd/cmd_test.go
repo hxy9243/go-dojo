@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"errors"
 	"flag"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -152,13 +154,20 @@ func TestParseVolumeFlag(t *testing.T) {
 	}
 }
 
-func TestPrepareRootfsDispatchesMissingImageReferenceToDockerSave(t *testing.T) {
+func TestPrepareRootfsDispatchesMissingImageReferenceToLocalDockerSave(t *testing.T) {
 	sentinel := errors.New("save called")
 	called := false
 	_, _, err := prepareRootfsWithSave("ubuntu:latest", func(image, output string) error {
 		called = true
 		if image != "ubuntu:latest" || output == "" {
 			t.Fatalf("saveImage(%q, %q)", image, output)
+		}
+		cwd, err := os.Getwd()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if filepath.Dir(output) != cwd {
+			t.Errorf("saveImage output directory = %q, want %q", filepath.Dir(output), cwd)
 		}
 		return sentinel
 	})
@@ -167,6 +176,24 @@ func TestPrepareRootfsDispatchesMissingImageReferenceToDockerSave(t *testing.T) 
 	}
 	if !errors.Is(err, sentinel) {
 		t.Fatalf("error = %v, want wrapped sentinel", err)
+	}
+}
+
+func TestPrepareRootfsKeepsLocalImageArchive(t *testing.T) {
+	var archivePath string
+	_, _, err := prepareRootfsWithSave("ubuntu:latest", func(_, output string) error {
+		archivePath = output
+		return os.WriteFile(output, []byte("not a docker-save archive"), 0o600)
+	})
+	if err == nil {
+		t.Fatal("prepareRootfsWithSave() error = nil, want extraction error")
+	}
+	if archivePath == "" {
+		t.Fatal("saveImage was not called")
+	}
+	t.Cleanup(func() { _ = os.Remove(archivePath) })
+	if _, statErr := os.Stat(archivePath); statErr != nil {
+		t.Fatalf("local image archive was removed: %v", statErr)
 	}
 }
 

@@ -14,7 +14,17 @@ import (
 // complete. The output tar is in docker-save format (a tar of tars with
 // a manifest.json).
 func Save(image string, outputTar string) error {
-	cmd := exec.Command("docker", "save", image, "-o", outputTar)
+	// pull docker image if not present
+	cmd := exec.Command("docker", "pull", image)
+	cmd.Stdout = nil
+	cmd.Stderr = nil
+
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("docker pull %s: %w", image, err)
+	}
+
+	// save image to local tar file
+	cmd = exec.Command("docker", "save", image, "-o", outputTar)
 	cmd.Stdout = nil
 	cmd.Stderr = nil
 
