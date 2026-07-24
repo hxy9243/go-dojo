@@ -169,6 +169,9 @@ func TestPrepareRootfsDispatchesMissingImageReferenceToLocalDockerSave(t *testin
 		if filepath.Dir(output) != cwd {
 			t.Errorf("saveImage output directory = %q, want %q", filepath.Dir(output), cwd)
 		}
+		if filepath.Base(output) != "ubuntu:latest.tar" {
+			t.Errorf("saveImage output filename = %q, want %q", filepath.Base(output), "ubuntu:latest.tar")
+		}
 		return sentinel
 	})
 	if !called {
@@ -176,6 +179,23 @@ func TestPrepareRootfsDispatchesMissingImageReferenceToLocalDockerSave(t *testin
 	}
 	if !errors.Is(err, sentinel) {
 		t.Fatalf("error = %v, want wrapped sentinel", err)
+	}
+}
+
+func TestImageArchiveName(t *testing.T) {
+	tests := map[string]string{
+		"ubuntu":                           "ubuntu.tar",
+		"ubuntu:latest":                    "ubuntu:latest.tar",
+		"docker.io/library/python:3.13":    "python:3.13.tar",
+		"ghcr.io/acme/widget@sha256:abcde": "widget.tar",
+	}
+
+	for image, want := range tests {
+		t.Run(image, func(t *testing.T) {
+			if got := imageArchiveName(image); got != want {
+				t.Errorf("imageArchiveName(%q) = %q, want %q", image, got, want)
+			}
+		})
 	}
 }
 

@@ -353,11 +353,11 @@ func importImageToLocal(image string, saveImage func(string, string) error) (str
 	if err != nil {
 		return "", nil, fmt.Errorf("resolve local image directory: %w", err)
 	}
-	archive, err := os.CreateTemp(workingDir, "containy-import-*.tar")
+	archivePath := filepath.Join(workingDir, imageArchiveName(image))
+	archive, err := os.OpenFile(archivePath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		return "", nil, fmt.Errorf("create local image archive: %w", err)
 	}
-	archivePath := archive.Name()
 	if err := archive.Close(); err != nil {
 		removeErr := os.Remove(archivePath)
 		return "", nil, errors.Join(
@@ -373,6 +373,17 @@ func importImageToLocal(image string, saveImage func(string, string) error) (str
 		)
 	}
 	return extractToTemp(archivePath)
+}
+
+// imageArchiveName uses the final image-reference component so an implicit
+// Docker save produces a useful local artifact, such as "python:3.13.tar" for
+// "docker.io/library/python:3.13".
+func imageArchiveName(image string) string {
+	name := filepath.Base(image)
+	if digestStart := strings.IndexByte(name, '@'); digestStart >= 0 {
+		name = name[:digestStart]
+	}
+	return name + ".tar"
 }
 
 func wrapRemoveError(path string, err error) error {
